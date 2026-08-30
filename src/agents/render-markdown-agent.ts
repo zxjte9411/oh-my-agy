@@ -1,0 +1,70 @@
+import { CANONICAL_AGENT_PROMPTS_V1 } from './prompts';
+import { canonicalAgentDefinition, isCanonicalAgentId } from './registry';
+import {
+  CANONICAL_AGENT_IDS_V1,
+  CanonicalAgentCapabilityModeV1,
+  CanonicalAgentIdV1,
+} from './types';
+
+export type NativeAgentCommandExecutionPolicyV1 = 'off' | 'sandbox';
+
+const READ_ONLY_TOOLS = Object.freeze(['view_file', 'grep_search'] as const);
+const READ_WRITE_TOOLS = Object.freeze([
+  'view_file',
+  'grep_search',
+  'replace_file_content',
+  'run_command',
+] as const);
+
+export interface RenderedNativeAgentV1 {
+  readonly id: CanonicalAgentIdV1;
+  readonly markdown: string;
+  readonly tools: readonly string[];
+  readonly commandExecutionPolicy: NativeAgentCommandExecutionPolicyV1;
+}
+
+/**
+ * 將 canonical registry 投影成 Antigravity Markdown custom-agent frontmatter。
+ * 只使用官方穩定 tool 名稱，避免未知 tool 造成 native subagent hang。
+ */
+export function renderCanonicalAgent(id: unknown): RenderedNativeAgentV1 {
+  if (!isCanonicalAgentId(id)) {
+    throw new Error(`Cannot render non-canonical agent role: ${String(id)}`);
+  }
+  const definition = canonicalAgentDefinition(id);
+  const tools = toolsForCapability(definition.capabilityFloor);
+  const commandExecutionPolicy = definition.capabilityFloor === 'read-only' ? 'off' : 'sandbox';
+  const lines = [
+    '---',
+    `name: ${yamlScalar(definition.id)}`,
+    `description: ${yamlScalar(definition.description)}`,
+    'tools:',
+    ...tools.map((tool) => `  - ${tool}`),
+    `mainAgent: ${String(definition.mainAgent)}`,
+    `subagent: ${String(definition.subagent)}`,
+    `model: ${definition.preferredModelTier}`,
+    `commandExecutionPolicy: ${commandExecutionPolicy}`,
+    '---',
+    '',
+    CANONICAL_AGENT_PROMPTS_V1[id].trim(),
+    '',
+  ];
+  return Object.freeze({
+    id,
+    markdown: lines.join('\n'),
+    tools,
+    commandExecutionPolicy,
+  });
+}
+
+export function renderAllCanonicalAgents(): readonly RenderedNativeAgentV1[] {
+  return Object.freeze(CANONICAL_AGENT_IDS_V1.map((id) => renderCanonicalAgent(id)));
+}
+
+function toolsForCapability(mode: CanonicalAgentCapabilityModeV1): readonly string[] {
+  return mode === 'read-only' ? READ_ONLY_TOOLS : READ_WRITE_TOOLS;
+}
+
+function yamlScalar(value: string): string {
+  return JSON.stringify(value);
+}

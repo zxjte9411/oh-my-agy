@@ -10,6 +10,7 @@ export type ParsedCliCommand =
   | { readonly kind: 'setup'; readonly args: readonly string[] }
   | { readonly kind: 'doctor'; readonly args: readonly string[] }
   | { readonly kind: 'skill'; readonly args: readonly string[] }
+  | { readonly kind: 'agents'; readonly args: readonly string[] }
   | { readonly kind: 'native'; readonly command: NativeCliCommand; readonly args: readonly string[] }
   | {
     readonly kind: 'extended';
@@ -108,6 +109,7 @@ export function parseCliArguments(argv: readonly string[]): ParsedCliCommand {
   if (first === 'setup') return { kind: 'setup', args: argv.slice(1) };
   if (first === 'doctor') return { kind: 'doctor', args: argv.slice(1) };
   if (first === 'skill') return { kind: 'skill', args: argv.slice(1) };
+  if (first === 'agents') return { kind: 'agents', args: argv.slice(1) };
   if (first === 'native' && isNativeCliCommand(argv[1])) {
     return { kind: 'native', command: argv[1], args: argv.slice(2) };
   }
@@ -125,8 +127,14 @@ function isExtendedCommand(value: string | undefined): value is ExtendedCliComma
   return value !== undefined && EXTENDED_COMMANDS.has(value as ExtendedCliCommand);
 }
 
+/**
+ * Entrypoint gate for native-owned command surfaces that must never fall back
+ * to ordinary agy passthrough. Native custom agents belong to the same gate as
+ * `oma native ...` even though their parser result has its own command kind.
+ */
 export function isStructuredNativeCommand(argv: readonly string[]): boolean {
-  return argv[0] === 'native' && isNativeCliCommand(argv[1]);
+  return argv[0] === 'agents'
+    || (argv[0] === 'native' && isNativeCliCommand(argv[1]));
 }
 
 function isNativeCliCommand(value: string | undefined): value is NativeCliCommand {
