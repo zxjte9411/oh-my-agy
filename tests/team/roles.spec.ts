@@ -1,5 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { CANONICAL_AGENT_IDS_V1 } from '../../src/agents/types';
+import { resolveCanonicalAgentId } from '../../src/agents/aliases';
 import {
   ContractViolation,
   RepositoryWorkflowV1,
@@ -13,6 +15,7 @@ import {
   OMA_ROLE_NAMES_V1,
   inspectOmaRolePosture,
   isOmaRole,
+  omaCanonicalAgentId,
   unknownOmaRoleMessage,
 } from '../../src/team/roles';
 
@@ -53,8 +56,8 @@ function task(id: string, dependencies: string[], writeScope: unknown, extra: Re
   };
 }
 
-describe('OMA role capability floors (OMG roles.py posture-from-role)', () => {
-  test('frozen map lists issue-named read-only floors and leader-only orchestrator', () => {
+describe('OMA role capability floors (canonical agent compatibility)', () => {
+  test('legacy floors remain unchanged and canonical roles inherit their agent posture', () => {
     expect(Object.isFrozen(OMA_ROLES_V1)).toBe(true);
     for (const role of ['reviewer', 'critic', 'verifier', 'security-reviewer', 'analyst'] as const) {
       expect(OMA_ROLES_V1[role]).toEqual({
@@ -73,7 +76,27 @@ describe('OMA role capability floors (OMG roles.py posture-from-role)', () => {
       writeScopeAllowed: true,
       childAllowed: true,
     });
+    expect(OMA_ROLES_V1.fixer).toEqual(OMA_ROLES_V1.executor);
+    expect(OMA_ROLES_V1.oracle).toEqual(OMA_ROLES_V1.reviewer);
+    expect(OMA_ROLES_V1.observer).toEqual(OMA_ROLES_V1.verifier);
     expect([...OMA_ROLE_NAMES_V1]).toEqual([...OMA_ROLE_NAMES_V1].sort((left, right) => left.localeCompare(right, 'en')));
+  });
+
+  test('all legal role names resolve to exactly one canonical agent', () => {
+    for (const canonicalId of CANONICAL_AGENT_IDS_V1) {
+      expect(isOmaRole(canonicalId)).toBe(true);
+      expect(resolveCanonicalAgentId(canonicalId)).toBe(canonicalId);
+    }
+    for (const role of OMA_ROLE_NAMES_V1) {
+      expect(resolveCanonicalAgentId(role)).not.toBeNull();
+      expect(omaCanonicalAgentId(role)).toBe(resolveCanonicalAgentId(role));
+    }
+    expect(omaCanonicalAgentId('reviewer')).toBe('oracle');
+    expect(omaCanonicalAgentId('architect')).toBe('oracle');
+    expect(omaCanonicalAgentId('analyst')).toBe('explorer');
+    expect(omaCanonicalAgentId('docs-reviewer')).toBe('librarian');
+    expect(omaCanonicalAgentId('debugger')).toBe('fixer');
+    expect(omaCanonicalAgentId('designer')).toBe('designer');
   });
 
   test('role×posture matrix: read-only floors reject elevation; read-write children may tighten', () => {
@@ -223,9 +246,11 @@ describe('Team manifest optional role floors', () => {
   test('read-only floor role with read_only + none is accepted', () => {
     const result = validateTeamManifest(manifest([
       task('review', [], 'none', { role: 'verifier' }),
+      task('observe', [], 'none', { role: 'observer' }),
     ]), fixture.repo);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.value.tasks[0].role).toBe('verifier');
+    expect(result.value.tasks[1].role).toBe('observer');
   });
 });
