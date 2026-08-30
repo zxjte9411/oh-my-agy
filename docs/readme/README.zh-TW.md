@@ -41,4 +41,29 @@ oma agents doctor --scope user
 
 完成後重新啟動 Antigravity，並使用 `/agents` 確認七個 canonical agents 已被發現。
 
+## 疑難排解
+
+OMA 的失敗模式通常是刻意的 **fail-closed** 或 **靜默 fail-open**。先執行 `oma doctor`。本發行版 **沒有** `oma hooks status` 診斷指令，不要把它當成可執行命令。
+
+| 症狀 | 診斷 | 修法 |
+|------|------|------|
+| hooks 沒有觸發 | `oma doctor`（plugin 已安裝且啟用）。檢查 `DISABLE_OMA` / `OMA_SKIP_HOOKS`。在 `OMA_HOOK_DEBUG=1` 且已設 `OMA_STATE_ROOT` 時查看 `<state-root>/logs/hook-debug.jsonl`。 | `oma setup`，然後 **重啟 host**。取消 kill-switch 環境變數。可選專案級 `.agents/hooks.json`。 |
+| `E_PLUGIN_NOT_ACTIVE` | `oma doctor` / `oma doctor --json`，檢查 plugin registry。 | `oma setup`，再用 `oma doctor` 確認。僅 slash 的 host 可用 `oma doctor --no-strict-plugin`。 |
+| `oma setup` 後 slash skill 沒出現 | `oma skill list`；`oma doctor` 檢查 `slash_skills` 與 `slash_collision`。 | 重啟 host session。Claude/Grok 使用 `/oh-my-agy:autopilot`。 |
+| Legacy magic 只印模式橫幅然後沒輸出 | 非 TTY（CI）會忽略子程序 stdio，除非 `OMA_LEGACY_STDIO=inherit`。 | 優先用 managed `oma ralph -- "task"`；可顯式設定 `OMA_LEGACY_STDIO=inherit` 或 `ignore`。 |
+
+### 環境變數
+
+只列出操作者會設的變數。Binding env 由 managed launch 注入，不要手設。沒有 `OMA_STATE_DIR`；出貨名稱是 `OMA_STATE_ROOT`。
+
+| 變數 | 預設值 | 作用 |
+|------|--------|------|
+| `DISABLE_OMA` | 未設定（關） | `1` 或 `true` 關閉全部 Antigravity hook。 |
+| `OMA_SKIP_HOOKS` | 未設定 | 逗號分隔要跳過的邏輯 hook 名。 |
+| `OMA_HOOK_DEBUG` | 未設定（關） | 把已脫敏診斷追加到 `<OMA_STATE_ROOT>/logs/hook-debug.jsonl`；未設 state root 時不寫。 |
+| `OMA_LEGACY_STDIO` | TTY 閘門 | Legacy magic spawn 的 stdio；顯式 `inherit` 或 `ignore` 可覆寫。 |
+| `OMA_TIMEOUT_MS` | 依路徑 | 正的毫秒數；用於有界 headless / managed 路徑。 |
+| `OMA_LAUNCH_POLICY` | `auto` | 裸 host-launch 傳輸：`auto`、`direct`、`tmux` 或 `detached-tmux`。 |
+| `OMA_STATE_ROOT` | 平台預設 | 持久 state root。 |
+
 完整發布與驗證規則請看 [`../RELEASE.zh-TW.md`](../RELEASE.zh-TW.md)，完整功能說明請看 [`../../README.md`](../../README.md)。
