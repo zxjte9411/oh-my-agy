@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { planNativeDelegation } from '../agents/orchestration';
 import { canonicalBytesV1 } from '../contracts/state-schemas';
 import {
   locateRunManifest,
@@ -17,6 +18,7 @@ export const MCP_OPERATION_NAMES_V1 = [
   'wiki.search',
   'team_status.read',
   'mailbox.list',
+  'delegation.plan',
   'proposal.create',
 ] as const;
 
@@ -88,6 +90,29 @@ export const MCP_TOOLS_V1: readonly McpToolDefinitionV1[] = Object.freeze([
     annotations: READ_ANNOTATIONS,
   },
   {
+    name: 'delegation.plan',
+    description: 'Create a deterministic canonical native-subagent plan and immutable planning evidence.',
+    inputSchema: objectSchema({
+      lanes: {
+        type: 'array',
+        minItems: 1,
+        maxItems: 16,
+        items: objectSchema({
+          id: { type: 'string', pattern: '^[a-z][a-z0-9-]{0,63}$' },
+          task: { type: 'string', minLength: 1, maxLength: 16384 },
+          intent: { type: 'string', minLength: 1, maxLength: 64 },
+          requested_role: { type: 'string', minLength: 1, maxLength: 64 },
+          depends_on: {
+            type: 'array',
+            maxItems: 16,
+            items: { type: 'string', pattern: '^[a-z][a-z0-9-]{0,63}$' },
+          },
+        }, ['id', 'task']),
+      },
+    }, ['lanes']),
+    annotations: PROPOSAL_ANNOTATIONS,
+  },
+  {
     name: 'proposal.create',
     description: 'Create an immutable proposal-only artifact; never mutate authoritative state.',
     inputSchema: objectSchema({
@@ -130,6 +155,8 @@ export async function invokeMcpOperation(
       return readTeamStatus(context.stateRoot, args);
     case 'mailbox.list':
       return listMailbox(context.stateRoot, args);
+    case 'delegation.plan':
+      return createDelegationPlan(repositoryRoot, args);
     case 'proposal.create':
       return createProposal(repositoryRoot, args);
   }
@@ -252,6 +279,42 @@ function listMailbox(stateRoot: string, args: JsonObject): unknown {
       delivered_at_ms: message.deliveredAtMs ?? null,
       acknowledged_at_ms: message.acknowledgedAtMs ?? null,
     })),
+  };
+}
+
+function createDelegationPlan(repositoryRoot: string, args: JsonObject): unknown {
+  exactKeys(args, ['lanes']);
+  if (!Array.isArray(args.lanes) || args.lanes.length < 1 || args.lanes.length > 16) {
+    throw new Error('E_MCP_ARGUMENT: lanes must contain 1..16 items');
+  }
+  const lanes = args.lanes.map((value, index) => {
+    const lane = plainObject(value, `lanes[${index}]`);
+    exactKeys(lane, ['id', 'task'], ['intent', 'requested_role', 'depends_on']);
+    return {
+      id: boundedString(lane.id, `lanes[${index}].id`, 64),
+      task: boundedString(lane.task, `lanes[${index}].task`, 16_384),
+      ...(lane.intent === undefined
+        ? {} : { intent: boundedString(lane.intent, `lanes[${index}].intent`, 64) }),
+      ...(lane.requested_role === undefined
+        ? {} : { requestedRole: boundedString(lane.requested_role, `lanes[${index}].requested_role`, 64) }),
+      ...(lane.depends_on === undefined
+        ? {} : { dependsOn: stringArray(lane.depends_on, `lanes[${index}].depends_on`, 16, 64) }),
+    };
+  });
+  const planned = planNativeDelegation({ lanes });
+  if (!planned.ok) throw new Error(`${planned.error.code}: ${planned.error.message}`);
+  const relativePath = `.agy/artifacts/native-delegation/${planned.value.planDigest}.json`;
+  const targetPath = path.resolve(repositoryRoot, ...relativePath.split('/'));
+  if (!contained(repositoryRoot, targetPath)) throw new Error('E_MCP_PATH: delegation plan path escaped root');
+  writeImmutableFile(targetPath, canonicalBytesV1(planned.value));
+  return {
+    store_kind: 'oma_mcp_native_delegation_plan',
+    schema_version: 1,
+    authority: 'planning_only',
+    plan: planned.value,
+    plan_digest: planned.value.planDigest,
+    plan_path: relativePath,
+    immutable: true,
   };
 }
 

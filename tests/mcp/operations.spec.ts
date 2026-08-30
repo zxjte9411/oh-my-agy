@@ -87,12 +87,12 @@ describe('exact hermetic OMA MCP surface', () => {
     }
   });
 
-  test('registry and JSON-RPC tools/list expose exactly six non-LSP operations', async () => {
+  test('registry and JSON-RPC tools/list expose exactly seven non-LSP operations', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'oma-mcp-list-'));
     try {
       expect(MCP_OPERATION_NAMES_V1).toEqual([
         'run_status.read', 'recovery_manifest.read', 'wiki.search',
-        'team_status.read', 'mailbox.list', 'proposal.create',
+        'team_status.read', 'mailbox.list', 'delegation.plan', 'proposal.create',
       ]);
       expect(listMcpTools().map((tool) => tool.name)).toEqual(MCP_OPERATION_NAMES_V1);
       expect(listMcpTools().some((tool) => /lsp|memory|ast/i.test(tool.name))).toBe(false);
@@ -199,6 +199,49 @@ describe('exact hermetic OMA MCP surface', () => {
         team_id: 'team', repo_key: 'repo', workspace_key: 'workspace', task_id: 'task',
         claim_token: 'stale', generation: 1, after_cursor: 0,
       }, context(root))).rejects.toThrow('stale');
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
+
+  test('delegation.plan routes canonical lanes and writes idempotent immutable planning evidence', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'oma-mcp-delegation-'));
+    try {
+      const args = {
+        lanes: [
+          { id: 'scan', task: 'Locate the implementation seam.', intent: 'codebase-discovery' },
+          { id: 'docs', task: 'Check current docs.', intent: 'external-research' },
+          {
+            id: 'impl', task: 'Implement the bounded change.', intent: 'implementation',
+            depends_on: ['scan', 'docs'],
+          },
+        ],
+      };
+      const first = await invokeMcpOperation('delegation.plan', args, context(root)) as any;
+      const second = await invokeMcpOperation('delegation.plan', args, context(root)) as any;
+      expect(second).toEqual(first);
+      expect(first.authority).toBe('planning_only');
+      expect(first.plan.lanes.map(({ id, agent }: any) => ({ id, agent }))).toEqual([
+        { id: 'docs', agent: 'librarian' },
+        { id: 'impl', agent: 'fixer' },
+        { id: 'scan', agent: 'explorer' },
+      ]);
+      expect(first.plan.waves).toEqual([
+        { index: 0, laneIds: ['docs', 'scan'], parallel: true },
+        { index: 1, laneIds: ['impl'], parallel: false },
+      ]);
+      const target = path.join(root, first.plan_path);
+      expect(fs.statSync(target).mode & 0o777).toBe(0o400);
+      expect(JSON.parse(fs.readFileSync(target, 'utf8')).planDigest).toBe(first.plan_digest);
+      expect(fs.existsSync(path.join(root, '.agy', 'state'))).toBe(false);
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
+
+  test('delegation.plan fails closed for unknown explicit roles', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'oma-mcp-delegation-invalid-'));
+    try {
+      await expect(invokeMcpOperation('delegation.plan', {
+        lanes: [{ id: 'bad', task: 'Do work.', requested_role: 'wizard', intent: 'implementation' }],
+      }, context(root))).rejects.toThrow('unknown requested agent role');
+      expect(fs.existsSync(path.join(root, '.agy', 'artifacts', 'native-delegation'))).toBe(false);
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
   });
 
