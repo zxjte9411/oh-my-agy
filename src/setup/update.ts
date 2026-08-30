@@ -534,7 +534,7 @@ function isOwnedOmaCli(cliPath: string): boolean {
     const pkg = JSON.parse(fs.readFileSync(path.join(packageRoot, 'package.json'), 'utf8')) as {
       name?: string;
     };
-    return pkg.name === '@iml1s/oh-my-agy';
+    return pkg.name === '@zxjte9411/oh-my-agy' || pkg.name === '@iml1s/oh-my-agy';
   } catch {
     return false;
   }
