@@ -87,12 +87,12 @@ describe('exact hermetic OMA MCP surface', () => {
     }
   });
 
-  test('registry and JSON-RPC tools/list expose exactly seven non-LSP operations', async () => {
+  test('registry and JSON-RPC tools/list expose exactly eight non-LSP operations', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'oma-mcp-list-'));
     try {
       expect(MCP_OPERATION_NAMES_V1).toEqual([
         'run_status.read', 'recovery_manifest.read', 'wiki.search',
-        'team_status.read', 'mailbox.list', 'delegation.plan', 'proposal.create',
+        'team_status.read', 'mailbox.list', 'delegation.plan', 'delegation.reconcile', 'proposal.create',
       ]);
       expect(listMcpTools().map((tool) => tool.name)).toEqual(MCP_OPERATION_NAMES_V1);
       expect(listMcpTools().some((tool) => /lsp|memory|ast/i.test(tool.name))).toBe(false);
@@ -202,7 +202,7 @@ describe('exact hermetic OMA MCP surface', () => {
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
   });
 
-  test('delegation.plan routes canonical lanes and writes idempotent immutable planning evidence', async () => {
+  test('delegation plan and reconciliation write immutable dependency-gated evidence', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'oma-mcp-delegation-'));
     try {
       const args = {
@@ -231,17 +231,49 @@ describe('exact hermetic OMA MCP surface', () => {
       const target = path.join(root, first.plan_path);
       expect(fs.statSync(target).mode & 0o777).toBe(0o400);
       expect(JSON.parse(fs.readFileSync(target, 'utf8')).planDigest).toBe(first.plan_digest);
+
+      const discovery = await invokeMcpOperation('delegation.reconcile', {
+        plan_digest: first.plan_digest,
+        outcomes: [
+          { lane_id: 'docs', status: 'completed', summary: 'Docs confirmed.' },
+          { lane_id: 'scan', status: 'completed', summary: 'Seam located.' },
+        ],
+      }, context(root)) as any;
+      expect(discovery.reconciliation).toMatchObject({
+        status: 'continue', completedWaves: 1, nextWaveIndex: 1, nextLaneIds: ['impl'],
+      });
+      expect(fs.statSync(path.join(root, discovery.reconciliation_path)).mode & 0o777).toBe(0o400);
+
+      const ready = await invokeMcpOperation('delegation.reconcile', {
+        plan_digest: first.plan_digest,
+        outcomes: [
+          { lane_id: 'docs', status: 'completed', summary: 'Docs confirmed.' },
+          { lane_id: 'scan', status: 'completed', summary: 'Seam located.' },
+          { lane_id: 'impl', status: 'completed', summary: 'Change completed.', evidence: ['tests:unit'] },
+        ],
+      }, context(root)) as any;
+      expect(ready.reconciliation.status).toBe('ready-for-verification');
       expect(fs.existsSync(path.join(root, '.agy', 'state'))).toBe(false);
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
   });
 
-  test('delegation.plan fails closed for unknown explicit roles', async () => {
+  test('delegation evidence fails closed for unknown roles and skipped waves', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'oma-mcp-delegation-invalid-'));
     try {
       await expect(invokeMcpOperation('delegation.plan', {
         lanes: [{ id: 'bad', task: 'Do work.', requested_role: 'wizard', intent: 'implementation' }],
       }, context(root))).rejects.toThrow('unknown requested agent role');
-      expect(fs.existsSync(path.join(root, '.agy', 'artifacts', 'native-delegation'))).toBe(false);
+
+      const planned = await invokeMcpOperation('delegation.plan', {
+        lanes: [
+          { id: 'scan', task: 'Inspect first.', intent: 'codebase-discovery' },
+          { id: 'impl', task: 'Implement later.', intent: 'implementation', depends_on: ['scan'] },
+        ],
+      }, context(root)) as any;
+      await expect(invokeMcpOperation('delegation.reconcile', {
+        plan_digest: planned.plan_digest,
+        outcomes: [{ lane_id: 'impl', status: 'completed', summary: 'Should not have run.' }],
+      }, context(root))).rejects.toThrow('skipped a dependency wave');
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
   });
 
