@@ -236,11 +236,17 @@ describe('0.7.0 release readback', () => {
     }
   });
 
-  test('release workflow is read-only verification and contains no publisher', () => {
+  test('release workflow publishes only the fork GitHub Release after verification', () => {
     const workflow = fs.readFileSync(path.join(root, '.github', 'workflows', 'release.yml'), 'utf8');
-    expect(workflow).toContain('contents: read');
-    expect(workflow).toContain('packages: read');
-    expect(workflow).not.toMatch(/(?:contents|packages|id-token):\s*write/u);
-    expect(workflow).not.toMatch(/npm\s+publish|action-gh-release|gh\s+release|dist-tag/u);
+    expect(workflow).toContain('contents: write');
+    expect(workflow).not.toMatch(/packages:\s*write|id-token:\s*write/u);
+    expect(workflow).toContain('npm pack --json --ignore-scripts');
+    expect(workflow).toContain('zxjte9411-oh-my-agy-$PKG.tgz');
+    expect(workflow).toContain('sha256sum "$ASSET" > SHA256SUMS');
+    expect(workflow).toContain("github.repository == 'zxjte9411/oh-my-agy'");
+    expect(workflow).toContain('gh release view');
+    expect(workflow).toContain('gh release create');
+    expect(workflow).toContain('gh release download');
+    expect(workflow).not.toMatch(/npm\s+publish|dist-tag/u);
   });
 });

@@ -1,4 +1,4 @@
-name: release-verification
+name: release
 
 on:
   push:
@@ -7,12 +7,11 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
-  packages: read
+  contents: write
 
 jobs:
-  verify:
-    name: Verify immutable release candidate
+  verify-and-publish:
+    name: Verify and publish immutable release candidate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -27,15 +26,19 @@ jobs:
       - run: npm run test:unit
       - run: npm run test:package
       - run: npm run test:e2e
+        env:
+          TEST_DIST: 'true'
       - run: npm run smoke
       - name: Verify tag and manifest versions
         run: |
           set -euo pipefail
           PKG="$(node -p "require('./package.json').version")"
+          NAME="$(node -p "require('./package.json').name")"
           PLUGIN="$(node -p "require('./plugin.json').version")"
           CLAUDE="$(node -p "require('./.claude-plugin/plugin.json').version")"
           MARKET="$(node -p "require('./.claude-plugin/marketplace.json').version")"
           ENTRY="$(node -p "require('./.claude-plugin/marketplace.json').plugins.find(p => p.name === 'oh-my-agy').version")"
+          test "$NAME" = '@zxjte9411/oh-my-agy'
           test "$PKG" = "$PLUGIN"
           test "$PKG" = "$CLAUDE"
           test "$PKG" = "$MARKET"
@@ -46,7 +49,7 @@ jobs:
       - name: Verify package readback surface
         run: |
           set -euo pipefail
-          npm pack --dry-run 2>&1 | tee pack.txt
+          npm pack --dry-run --ignore-scripts 2>&1 | tee pack.txt
           grep -E 'dist/bin/oma\.js' pack.txt
           grep -E 'dist/src/mcp/server\.js' pack.txt
           grep -E 'dist/src/workflows/runner\.js' pack.txt
@@ -67,3 +70,41 @@ jobs:
             exit 1
           fi
           grep -E 'E_PRODUCTION_EVIDENCE' production.txt
+      - name: Pack and checksum verified release bytes
+        id: release_asset
+        run: |
+          set -euo pipefail
+          PKG="$(node -p "require('./package.json').version")"
+          EXPECTED="zxjte9411-oh-my-agy-$PKG.tgz"
+          PACK_JSON="$(npm pack --json --ignore-scripts)"
+          ASSET="$(node -e 'const value=JSON.parse(process.argv[1]);if(!Array.isArray(value)||value.length!==1||typeof value[0].filename!=="string")process.exit(2);process.stdout.write(value[0].filename)' "$PACK_JSON")"
+          test "$ASSET" = "$EXPECTED"
+          sha256sum "$ASSET" > SHA256SUMS
+          sha256sum --check SHA256SUMS
+          printf 'asset=%s\n' "$ASSET" >> "$GITHUB_OUTPUT"
+      - name: Publish fork GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v') && github.repository == 'zxjte9411/oh-my-agy'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ASSET='${{ steps.release_asset.outputs.asset }}'
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "release already exists: $GITHUB_REF_NAME" >&2
+            exit 1
+          fi
+          gh release create "$GITHUB_REF_NAME" "$ASSET" SHA256SUMS \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --title "oh-my-agy $GITHUB_REF_NAME" \
+            --generate-notes
+          READBACK="$RUNNER_TEMP/release-readback"
+          mkdir -p "$READBACK"
+          gh release download "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "$ASSET" \
+            --pattern SHA256SUMS \
+            --dir "$READBACK"
+          cmp "$ASSET" "$READBACK/$ASSET"
+          cmp SHA256SUMS "$READBACK/SHA256SUMS"
+          (cd "$READBACK" && sha256sum --check SHA256SUMS)

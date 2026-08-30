@@ -1,11 +1,11 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-07-21 | Updated: 2026-07-21 -->
+<!-- Generated: 2026-07-21 | Updated: 2026-08-31 -->
 
 # .github
 
 ## Purpose
 
-GitHub Actions CI and release automation for `@iml1s/oh-my-agy`.
+GitHub Actions CI and release automation for `@zxjte9411/oh-my-agy`.
 
 ## Key Files
 
@@ -22,16 +22,18 @@ None at this level beyond workflows.
 ### Working In This Directory
 
 - Release tags `v*` must equal package/plugin/.claude-plugin versions.
-- Release runs unit + package + e2e, packs tarball, GH Release, GitHub Packages; npmjs optional.
+- The fork release channel is GitHub Releases in `zxjte9411/oh-my-agy` with `zxjte9411-oh-my-agy-X.Y.Z.tgz` plus `SHA256SUMS`.
+- Release runs deterministic build/unit/package/e2e/smoke gates before creating the GitHub Release and read-backing the exact assets.
+- Do not add npmjs or GitHub Packages publication without a separate product decision and registry-safety review.
 
 ### Testing Requirements
 
-- Workflows are the source of truth for release gates; do not weaken e2e without product decision.
+- Workflows are the source of truth for release gates; do not weaken e2e, checksum, or readback requirements without product approval.
 
 ## Dependencies
 
 ### External
 
-- GitHub Actions runners, `GITHUB_TOKEN`, optional `NPM_TOKEN`
+- GitHub Actions runners and `GITHUB_TOKEN` for the repository-owned GitHub Release.
 
 <!-- MANUAL: -->
