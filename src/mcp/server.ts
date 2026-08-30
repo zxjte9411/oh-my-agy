@@ -22,9 +22,35 @@ export interface JsonRpcResponseV1 {
   error?: { code: number; message: string; data?: unknown };
 }
 
+export interface McpToolSurfaceV1 {
+  readonly serverName: string;
+  readonly listTools: () => readonly {
+    readonly name: string;
+    readonly description: string;
+    readonly inputSchema: Readonly<Record<string, unknown>>;
+    readonly annotations: {
+      readonly readOnlyHint: boolean;
+      readonly destructiveHint: boolean;
+      readonly idempotentHint: boolean;
+    };
+  }[];
+  readonly invoke: (
+    name: string,
+    rawArguments: unknown,
+    context: Readonly<McpOperationContextV1>,
+  ) => Promise<unknown>;
+}
+
+export const PUBLIC_MCP_TOOL_SURFACE_V1: McpToolSurfaceV1 = Object.freeze({
+  serverName: 'oh-my-agy',
+  listTools: listMcpTools,
+  invoke: invokeMcpOperation,
+});
+
 export async function handleMcpJsonRpc(
   rawRequest: unknown,
   context: Readonly<McpOperationContextV1>,
+  surface: Readonly<McpToolSurfaceV1> = PUBLIC_MCP_TOOL_SURFACE_V1,
 ): Promise<JsonRpcResponseV1 | null> {
   let request: JsonRpcRequestV1;
   try {
@@ -48,16 +74,16 @@ export async function handleMcpJsonRpc(
       result = {
         protocolVersion: OMA_MCP_PROTOCOL_VERSION_V1,
         capabilities: { tools: { listChanged: false } },
-        serverInfo: { name: 'oh-my-agy', version: '1' },
+        serverInfo: { name: surface.serverName, version: '1' },
       };
     } else if (request.method === 'ping') {
       result = {};
     } else if (request.method === 'tools/list') {
-      result = { tools: listMcpTools() };
+      result = { tools: surface.listTools() };
     } else if (request.method === 'tools/call') {
       const params = plainObject(request.params, 'tools/call params');
       if (typeof params.name !== 'string') throw new Error('E_MCP_ARGUMENT: tool name is required');
-      const structuredContent = await invokeMcpOperation(
+      const structuredContent = await surface.invoke(
         params.name,
         params.arguments ?? {},
         context,
@@ -91,6 +117,7 @@ export function startMcpNdjsonServer(
   context: Readonly<McpOperationContextV1>,
   input: NodeJS.ReadableStream = process.stdin,
   output: NodeJS.WritableStream = process.stdout,
+  surface: Readonly<McpToolSurfaceV1> = PUBLIC_MCP_TOOL_SURFACE_V1,
 ): void {
   const lines = readline.createInterface({ input });
   let chain = Promise.resolve();
@@ -106,7 +133,7 @@ export function startMcpNdjsonServer(
         })}\n`);
         return;
       }
-      const response = await handleMcpJsonRpc(request, context);
+      const response = await handleMcpJsonRpc(request, context, surface);
       if (response !== null) output.write(`${canonicalBytesV1(response).toString('utf8')}\n`);
     });
   });

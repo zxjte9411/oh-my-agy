@@ -1,4 +1,4 @@
-import { CANONICAL_AGENT_PROMPTS_V1 } from './prompts';
+import { canonicalAgentPromptV1 } from './prompts';
 import { canonicalAgentDefinition, isCanonicalAgentId } from './registry';
 import {
   CANONICAL_AGENT_IDS_V1,
@@ -15,24 +15,41 @@ const READ_WRITE_TOOLS = Object.freeze([
   'replace_file_content',
   'run_command',
 ] as const);
+const NATIVE_ORCHESTRATOR_TOOLS = Object.freeze([
+  ...READ_WRITE_TOOLS,
+  'invoke_subagent',
+] as const);
+
+export interface RenderCanonicalAgentOptionsV1 {
+  readonly nativeDelegationAvailable?: boolean;
+}
 
 export interface RenderedNativeAgentV1 {
   readonly id: CanonicalAgentIdV1;
   readonly markdown: string;
   readonly tools: readonly string[];
   readonly commandExecutionPolicy: NativeAgentCommandExecutionPolicyV1;
+  readonly omaMcpConfigured: boolean;
 }
 
 /**
  * 將 canonical registry 投影成 Antigravity Markdown custom-agent frontmatter。
- * 只使用官方穩定 tool 名稱，避免未知 tool 造成 native subagent hang。
+ * 只使用官方穩定 tool 名稱；invoke_subagent 僅在 capability-proven orchestrator 上暴露。
+ * Native orchestrator 使用 agent-private OMA MCP surface，不擴張既有 public MCP contract。
  */
-export function renderCanonicalAgent(id: unknown): RenderedNativeAgentV1 {
+export function renderCanonicalAgent(
+  id: unknown,
+  options: Readonly<RenderCanonicalAgentOptionsV1> = {},
+): RenderedNativeAgentV1 {
   if (!isCanonicalAgentId(id)) {
     throw new Error(`Cannot render non-canonical agent role: ${String(id)}`);
   }
   const definition = canonicalAgentDefinition(id);
-  const tools = toolsForCapability(definition.capabilityFloor);
+  const nativeDelegationAvailable = id === 'orchestrator'
+    && options.nativeDelegationAvailable === true;
+  const tools = nativeDelegationAvailable
+    ? NATIVE_ORCHESTRATOR_TOOLS
+    : toolsForCapability(definition.capabilityFloor);
   const commandExecutionPolicy = definition.capabilityFloor === 'read-only' ? 'off' : 'sandbox';
   const lines = [
     '---',
@@ -44,9 +61,17 @@ export function renderCanonicalAgent(id: unknown): RenderedNativeAgentV1 {
     `subagent: ${String(definition.subagent)}`,
     `model: ${definition.preferredModelTier}`,
     `commandExecutionPolicy: ${commandExecutionPolicy}`,
+    ...(nativeDelegationAvailable ? [
+      'mcpServers:',
+      '  oh-my-agy-agents:',
+      '    command: oma',
+      '    args:',
+      '      - agents',
+      '      - mcp-server',
+    ] : []),
     '---',
     '',
-    CANONICAL_AGENT_PROMPTS_V1[id].trim(),
+    canonicalAgentPromptV1(id, { nativeDelegationAvailable }).trim(),
     '',
   ];
   return Object.freeze({
@@ -54,11 +79,14 @@ export function renderCanonicalAgent(id: unknown): RenderedNativeAgentV1 {
     markdown: lines.join('\n'),
     tools,
     commandExecutionPolicy,
+    omaMcpConfigured: nativeDelegationAvailable,
   });
 }
 
-export function renderAllCanonicalAgents(): readonly RenderedNativeAgentV1[] {
-  return Object.freeze(CANONICAL_AGENT_IDS_V1.map((id) => renderCanonicalAgent(id)));
+export function renderAllCanonicalAgents(
+  options: Readonly<RenderCanonicalAgentOptionsV1> = {},
+): readonly RenderedNativeAgentV1[] {
+  return Object.freeze(CANONICAL_AGENT_IDS_V1.map((id) => renderCanonicalAgent(id, options)));
 }
 
 function toolsForCapability(mode: CanonicalAgentCapabilityModeV1): readonly string[] {
