@@ -127,8 +127,14 @@ function isExtendedCommand(value: string | undefined): value is ExtendedCliComma
   return value !== undefined && EXTENDED_COMMANDS.has(value as ExtendedCliCommand);
 }
 
+/**
+ * Entrypoint gate for native-owned command surfaces that must never fall back
+ * to ordinary agy passthrough. Native custom agents belong to the same gate as
+ * `oma native ...` even though their parser result has its own command kind.
+ */
 export function isStructuredNativeCommand(argv: readonly string[]): boolean {
-  return argv[0] === 'native' && isNativeCliCommand(argv[1]);
+  return argv[0] === 'agents'
+    || (argv[0] === 'native' && isNativeCliCommand(argv[1]));
 }
 
 function isNativeCliCommand(value: string | undefined): value is NativeCliCommand {
