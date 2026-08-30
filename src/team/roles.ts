@@ -90,7 +90,7 @@ export function inspectOmaRolePosture(input: OmaRolePostureInputV1): OmaRolePost
     return {
       ok: false,
       code: 'child-forbidden',
-      message: `role ${input.role} is leader-only and cannot be assigned to a child task or workflow stage; use a worker role such as fixer`,
+      message: `role ${input.role} is leader-only and cannot be assigned to a child task or workflow stage; use a worker role such as executor`,
       details: { role: input.role, childAllowed: false },
     };
   }
