@@ -3,7 +3,14 @@ import { parseCliArguments } from '../../src/cli/parser';
 import { ok } from '../../src/runtime/types';
 
 function services(): CliServices {
-  const processResult = ok({ code: 0, signal: null, timedOut: false, stdout: '', stderr: '' });
+  const processResult = ok({
+    code: 0,
+    signal: null,
+    timedOut: false,
+    stdout: '',
+    stderr: '',
+    processIdentity: null,
+  });
   return {
     version: 'test',
     launchMode: async () => processResult,
