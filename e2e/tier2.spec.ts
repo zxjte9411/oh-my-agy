@@ -195,7 +195,7 @@ describe('Tier 2 E2E 測試 - 邊界與極端情況', () => {
     });
 
     test('TC-T2-13: 諮詢性語境 (Informational Context) 過濾', async () => {
-      const result = await runOma(['ask', '"what is search?"']);
+      const result = await runOma(['"what is search?"']);
       expect(result.code).toBe(0);
       expect(result.stdout).not.toContain('[search-mode]');
       expect(result.stdout).toContain('實體 agy 執行成功');

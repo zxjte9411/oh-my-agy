@@ -40,7 +40,23 @@ function surface(root: string, version: string, marker = version): void {
   }));
   fs.writeFileSync(path.join(root, 'plugin.json'), JSON.stringify({ name: 'oh-my-agy', version }));
   fs.writeFileSync(path.join(root, '.claude-plugin', 'plugin.json'), JSON.stringify({
-    name: 'oh-my-agy', version, skills: ['./skills/autopilot/'],
+    name: 'oh-my-agy',
+    version,
+    skills: ['./skills/autopilot/'],
+    mcpServers: './.claude-plugin/.mcp.json',
+  }));
+  fs.writeFileSync(path.join(root, '.claude-plugin', 'marketplace.json'), JSON.stringify({
+    name: 'oh-my-agy',
+    version,
+    plugins: [{ name: 'oh-my-agy', source: './', version }],
+  }));
+  fs.writeFileSync(path.join(root, '.claude-plugin', '.mcp.json'), JSON.stringify({
+    mcpServers: {
+      'oh-my-agy': {
+        command: 'node',
+        args: ['${CLAUDE_PLUGIN_ROOT}/dist/bin/oma.js', 'mcp-server'],
+      },
+    },
   }));
   fs.writeFileSync(path.join(root, 'hooks.json'), JSON.stringify({
     'oh-my-agy-runtime': {
@@ -264,7 +280,7 @@ describe('fresh-home release install attestation', () => {
     expect(fs.existsSync(path.join(scratch, 'must-not-exist'))).toBe(false);
   });
 
-  test('directory asset installs into isolated HOME/config/state and passes release doctor 0', async () => {
+  test('directory asset installs with hooks observation preserved as an advisory warning', async () => {
     const identity = computePackageIdentity(source);
     expect(identity.ok).toBe(true);
     if (!identity.ok) return;
@@ -281,7 +297,8 @@ describe('fresh-home release install attestation', () => {
     expect(result).toEqual(expect.objectContaining({
       ok: true,
       value: expect.objectContaining({
-        doctorExitCode: 0,
+        status: 'completed_with_warning',
+        doctorExitCode: 2,
         packageDigest: identity.value.digest,
         restoredPrior: false,
       }),
@@ -402,16 +419,21 @@ describe('standalone and offline install shell acceptance', () => {
     });
   }
 
+  function expectAdvisoryReleaseSuccess(result: ReturnType<typeof spawnSync>): void {
+    expect({ status: result.status, signal: result.signal }).toEqual({ status: 0, signal: null });
+    expect(result.stdout).toContain('completed_with_warning');
+    expect(result.stdout).not.toContain('installed and exactly verified');
+    expect(result.stderr).toContain('warn: primary install completed with development warnings');
+    expect(result.stderr).toContain('completed with warnings; receipt preserves the exact primary result');
+  }
+
   test('manual archive + SHA256SUMS succeeds with sealed PATH and zero curl/npm/build', () => {
     const root = path.join(suiteRoot, 'offline-success');
     const harness = installerHarness(root, asset, checksums);
     const result = run(harness, path.join(packageRoot, 'scripts', 'install.sh'), [
       '--asset', asset, '--checksums', checksums, '--no-auxiliary',
     ]);
-    expect({ status: result.status, signal: result.signal, stderr: result.stderr }).toEqual({
-      status: 0, signal: null, stderr: '',
-    });
-    expect(result.stdout).toContain('installed and exactly verified');
+    expectAdvisoryReleaseSuccess(result);
     expect(fs.existsSync(path.join(root, 'npm.log'))).toBe(false);
     expect(fs.existsSync(path.join(root, 'curl.log'))).toBe(false);
     expect(fs.readFileSync(path.join(root, 'agy.log'), 'utf8')).toContain('plugin install');
@@ -460,8 +482,7 @@ describe('standalone and offline install shell acceptance', () => {
     const result = run(harness, path.join(packageRoot, 'scripts', 'install.sh'), [
       '--asset', asset, '--asset-sha256', assetDigest, '--no-auxiliary',
     ]);
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain('installed and exactly verified');
+    expectAdvisoryReleaseSuccess(result);
     expect(fs.existsSync(path.join(root, 'curl.log'))).toBe(false);
     expect(fs.existsSync(path.join(root, 'npm.log'))).toBe(false);
     const receipt = readInstallReceipt(installReceiptPaths(harness.state)[0]);
@@ -484,8 +505,7 @@ describe('standalone and offline install shell acceptance', () => {
     const result = run(harness, standalone, [
       '--github', '--tag', `v${version}`, '--no-auxiliary',
     ], { ...harness.env, OMA_TEST_CURL_MODE: 'release' });
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain('installed and exactly verified');
+    expectAdvisoryReleaseSuccess(result);
     expect(fs.existsSync(path.join(root, 'npm.log'))).toBe(false);
     const curlLog = fs.readFileSync(path.join(root, 'curl.log'), 'utf8');
     expect(curlLog).toContain(`/releases/download/v${version}/iml1s-oh-my-agy-${version}.tgz`);

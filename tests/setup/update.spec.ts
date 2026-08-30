@@ -85,13 +85,14 @@ class InstallingAdapter implements PluginCommandAdapter {
   }
 }
 
-function probe(exitCode: number | null, valid = true): DoctorProbeV1 {
+function probe(exitCode: number | null, valid = true, warningIds?: string[]): DoctorProbeV1 {
   return {
     argv: ['node', 'dist/bin/oma.js', 'doctor', '--json'],
     exitCode,
     stdout: valid ? JSON.stringify({ schemaVersion: 1, exitCode }) : 'not-json',
     stderr: '',
     valid,
+    ...(warningIds === undefined ? {} : { warningIds }),
   };
 }
 
@@ -133,6 +134,20 @@ describe('immutable update and doctor gate', () => {
     for (const candidate of [probe(1), probe(null), probe(0, false), probe(2)]) {
       const mode = candidate.exitCode === 2 ? 'release' : 'development';
       expect(classifyDoctorProbe(mode, candidate).ok).toBe(false);
+    }
+  });
+
+  test('release doctor classifier accepts only hooks_observed advisory warnings', () => {
+    expect(classifyDoctorProbe('release', probe(2, true, ['hooks_observed']))).toEqual({
+      ok: true,
+      value: 'completed_with_warning',
+    });
+    for (const warningIds of [
+      [],
+      ['mcp_registration'],
+      ['hooks_observed', 'mcp_registration'],
+    ]) {
+      expect(classifyDoctorProbe('release', probe(2, true, warningIds)).ok).toBe(false);
     }
   });
 
@@ -518,4 +533,3 @@ describe('immutable update and doctor gate', () => {
       .toBe('0.9.0');
   });
 });
-
