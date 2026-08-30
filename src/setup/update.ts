@@ -31,9 +31,12 @@ export interface DoctorProbeV1 {
   stdout: string;
   stderr: string;
   valid: boolean;
+  warningIds?: string[];
 }
 
 export type InstallGateMode = 'development' | 'release';
+
+const RELEASE_INSTALL_ADVISORY_WARNING_IDS = new Set(['hooks_observed']);
 
 export interface ImmutableInstallUpdaterOptions {
   packageRoot: string;
@@ -159,6 +162,13 @@ interface PointerSnapshot {
   previousTarget: string | null;
 }
 
+function hasOnlyReleaseInstallAdvisoryWarnings(probe: Readonly<DoctorProbeV1>): boolean {
+  const warningIds = probe.warningIds;
+  return Array.isArray(warningIds)
+    && warningIds.length > 0
+    && warningIds.every((id) => RELEASE_INSTALL_ADVISORY_WARNING_IDS.has(id));
+}
+
 export function classifyDoctorProbe(
   mode: InstallGateMode,
   probe: Readonly<DoctorProbeV1>,
@@ -171,7 +181,10 @@ export function classifyDoctorProbe(
     }));
   }
   if (probe.exitCode === 0) return ok('installed');
-  if (probe.exitCode === 2 && mode === 'development') return ok('completed_with_warning');
+  if (probe.exitCode === 2 && (
+    mode === 'development'
+    || (mode === 'release' && hasOnlyReleaseInstallAdvisoryWarnings(probe))
+  )) return ok('completed_with_warning');
   return err(runtimeError('E_VALIDATOR_REJECTED', 'doctor gate rejected installed candidate', {
     mode,
     exitCode: probe.exitCode,
@@ -459,6 +472,10 @@ export class ImmutableInstallUpdater {
       stdout: canonicalJson(report.value),
       stderr: report.value.exitCode === 0 ? '' : doctorReportToLines(report.value).join('\n'),
       valid: true,
+      warningIds: report.value.checks
+        .filter((check) => check.status === 'warn')
+        .map((check) => check.id)
+        .sort((left, right) => left.localeCompare(right, 'en')),
     };
   }
 }
