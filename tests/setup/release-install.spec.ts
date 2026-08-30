@@ -40,7 +40,23 @@ function surface(root: string, version: string, marker = version): void {
   }));
   fs.writeFileSync(path.join(root, 'plugin.json'), JSON.stringify({ name: 'oh-my-agy', version }));
   fs.writeFileSync(path.join(root, '.claude-plugin', 'plugin.json'), JSON.stringify({
-    name: 'oh-my-agy', version, skills: ['./skills/autopilot/'],
+    name: 'oh-my-agy',
+    version,
+    skills: ['./skills/autopilot/'],
+    mcpServers: './.claude-plugin/.mcp.json',
+  }));
+  fs.writeFileSync(path.join(root, '.claude-plugin', 'marketplace.json'), JSON.stringify({
+    name: 'oh-my-agy',
+    version,
+    plugins: [{ name: 'oh-my-agy', source: './', version }],
+  }));
+  fs.writeFileSync(path.join(root, '.claude-plugin', '.mcp.json'), JSON.stringify({
+    mcpServers: {
+      'oh-my-agy': {
+        command: 'node',
+        args: ['${CLAUDE_PLUGIN_ROOT}/dist/bin/oma.js', 'mcp-server'],
+      },
+    },
   }));
   fs.writeFileSync(path.join(root, 'hooks.json'), JSON.stringify({
     'oh-my-agy-runtime': {
