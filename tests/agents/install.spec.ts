@@ -1,0 +1,155 @@
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import {
+  CapabilityObservationV1,
+  HostIdentityV1,
+  PluginIdentityV1,
+  assembleHostCapabilityProfile,
+  hostCapabilityIdentityDigest,
+} from '../../src/native/capability-profile';
+import {
+  doctorNativeAgentInstallation,
+  installNativeAgents,
+  resolveNativeAgentRoot,
+} from '../../src/agents/install';
+import { CANONICAL_AGENT_IDS_V1 } from '../../src/agents/types';
+
+const REQUIRED = [
+  'custom_agent.markdown',
+  'custom_agent.main_agent',
+  'custom_agent.subagent',
+  'custom_agent.model',
+  'custom_agent.command_execution_policy',
+] as const;
+
+function supportedProfile() {
+  const now = '2026-08-30T00:00:00.000Z';
+  const host: HostIdentityV1 = {
+    realpath: '/usr/local/bin/agy',
+    binarySha256: 'a'.repeat(64),
+    version: '1.1.6',
+    versionOutputSha256: 'b'.repeat(64),
+    helpOutputSha256: 'c'.repeat(64),
+    platform: 'linux',
+    arch: 'x64',
+  };
+  const plugin: PluginIdentityV1 = {
+    status: 'absent',
+    realpath: null,
+    packageDigest: null,
+    version: null,
+    readbackDigest: null,
+    enabled: false,
+  };
+  const identityDigest = hostCapabilityIdentityDigest(host, plugin);
+  const observations: CapabilityObservationV1[] = REQUIRED.map((capability) => ({
+    capability,
+    source: 'help',
+    tier: 'observed',
+    result: 'positive',
+    observedAt: now,
+    identityDigest,
+    detailCode: 'TEST_SUPPORTED',
+    diagnostic: null,
+  }));
+  return assembleHostCapabilityProfile({
+    evaluationTimestamp: now,
+    hostIdentityBefore: host,
+    hostIdentityAfter: host,
+    pluginIdentityBefore: plugin,
+    pluginIdentityAfter: plugin,
+    observations,
+  });
+}
+
+describe('native agent installation', () => {
+  test('installs only canonical project agents and is idempotent by ownership receipt', () => {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'oma-agent-project-'));
+    try {
+      const first = installNativeAgents({
+        scope: 'project',
+        workspaceRoot: workspace,
+        capabilityProfile: supportedProfile(),
+        now: () => new Date('2026-08-30T01:00:00.000Z'),
+        idFactory: () => 'tx-project',
+      });
+      expect(first.ok).toBe(true);
+      if (!first.ok) return;
+      expect(first.value.idempotent).toBe(false);
+      for (const id of CANONICAL_AGENT_IDS_V1) {
+        expect(fs.existsSync(path.join(first.value.agentsRoot, id, 'agent.md'))).toBe(true);
+      }
+      expect(fs.existsSync(path.join(first.value.agentsRoot, 'reviewer'))).toBe(false);
+      expect(fs.existsSync(first.value.receiptPath)).toBe(true);
+
+      const second = installNativeAgents({
+        scope: 'project', workspaceRoot: workspace, capabilityProfile: supportedProfile(),
+      });
+      expect(second.ok).toBe(true);
+      if (second.ok) expect(second.value.idempotent).toBe(true);
+      expect(doctorNativeAgentInstallation({
+        scope: 'project', workspaceRoot: workspace, capabilityProfile: supportedProfile(),
+      }).status).toBe('healthy');
+    } finally {
+      fs.rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test('uses the documented Antigravity global agents directory for user scope', () => {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'oma-agent-workspace-'));
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'oma-agent-home-'));
+    try {
+      const installed = installNativeAgents({
+        scope: 'user', workspaceRoot: workspace, homeDir: home, capabilityProfile: supportedProfile(),
+      });
+      expect(installed.ok).toBe(true);
+      expect(resolveNativeAgentRoot('user', workspace, home))
+        .toBe(path.join(home, '.gemini', 'config', 'agents'));
+    } finally {
+      fs.rmSync(workspace, { recursive: true, force: true });
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test('fails closed instead of overwriting an unowned canonical agent', () => {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'oma-agent-collision-'));
+    try {
+      const root = resolveNativeAgentRoot('project', workspace);
+      const target = path.join(root, 'oracle', 'agent.md');
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, 'user-owned\n', 'utf8');
+      const result = installNativeAgents({
+        scope: 'project', workspaceRoot: workspace, capabilityProfile: supportedProfile(),
+      });
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.code).toBe('E_ALREADY_EXISTS');
+      expect(fs.readFileSync(target, 'utf8')).toBe('user-owned\n');
+    } finally {
+      fs.rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test('detects external edits and refuses to claim them on reinstall', () => {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'oma-agent-drift-'));
+    try {
+      const installed = installNativeAgents({
+        scope: 'project', workspaceRoot: workspace, capabilityProfile: supportedProfile(),
+      });
+      expect(installed.ok).toBe(true);
+      if (!installed.ok) return;
+      const target = path.join(installed.value.agentsRoot, 'fixer', 'agent.md');
+      fs.appendFileSync(target, '\nuser edit\n', 'utf8');
+      expect(doctorNativeAgentInstallation({
+        scope: 'project', workspaceRoot: workspace, capabilityProfile: supportedProfile(),
+      }).status).toBe('drifted');
+      const reinstall = installNativeAgents({
+        scope: 'project', workspaceRoot: workspace, capabilityProfile: supportedProfile(),
+      });
+      expect(reinstall.ok).toBe(false);
+      if (!reinstall.ok) expect(reinstall.error.code).toBe('E_PROJECTION_HASH_MISMATCH');
+    } finally {
+      fs.rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+});
