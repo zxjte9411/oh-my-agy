@@ -14,6 +14,8 @@ import { CanonicalAgentCapabilityModeV1, CanonicalAgentIdV1 } from './types';
 export const NATIVE_DELEGATION_PLAN_SCHEMA_V1 = 'oma.native-delegation-plan/v1' as const;
 export const NATIVE_DELEGATION_CAPABILITIES_V1 = Object.freeze([
   'custom_agent.subagent',
+  'custom_agent.inherit_mcp',
+  'mcp.local_config',
   'subagent.invoke',
 ] as const);
 

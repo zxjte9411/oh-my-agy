@@ -30,16 +30,20 @@ function capabilityProfile(invokeSupported: boolean) {
     enabled: true,
   };
   const identityDigest = hostCapabilityIdentityDigest(host, plugin);
-  const observations: CapabilityObservationV1[] = [{
-    capability: 'custom_agent.subagent',
-    source: 'help',
-    tier: 'observed',
-    result: 'positive',
+  const observations: CapabilityObservationV1[] = [
+    'custom_agent.subagent',
+    'custom_agent.inherit_mcp',
+    'mcp.local_config',
+  ].map((capability) => ({
+    capability,
+    source: 'help' as const,
+    tier: 'observed' as const,
+    result: 'positive' as const,
     observedAt: now,
     identityDigest,
-    detailCode: 'TEST_CUSTOM_AGENT_SUBAGENT',
+    detailCode: 'TEST_NATIVE_DELEGATION_SUPPORT',
     diagnostic: null,
-  }];
+  }));
   if (invokeSupported) {
     observations.push({
       capability: 'subagent.invoke',
@@ -138,10 +142,13 @@ describe('native orchestrator delegation planning', () => {
     if (!result.ok) expect(result.error.code).toBe('E_TASK_DEPENDENCY_BLOCKED');
   });
 
-  test('requires verified native invoke evidence before advertising delegation availability', () => {
-    expect(assessNativeDelegationCapability(capabilityProfile(true))).toMatchObject({
-      status: 'available', diagnostic: null,
-    });
+  test('requires MCP inheritance and verified native invoke evidence before advertising delegation', () => {
+    const available = assessNativeDelegationCapability(capabilityProfile(true));
+    expect(available).toMatchObject({ status: 'available', diagnostic: null });
+    expect(available.requirements.map(({ capability }) => capability)).toEqual([
+      'custom_agent.subagent', 'custom_agent.inherit_mcp', 'mcp.local_config', 'subagent.invoke',
+    ]);
+
     const unavailable = assessNativeDelegationCapability(capabilityProfile(false));
     expect(unavailable.status).toBe('unavailable');
     expect(unavailable.diagnostic).toContain('subagent.invoke');
