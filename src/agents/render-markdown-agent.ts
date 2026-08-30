@@ -29,12 +29,13 @@ export interface RenderedNativeAgentV1 {
   readonly markdown: string;
   readonly tools: readonly string[];
   readonly commandExecutionPolicy: NativeAgentCommandExecutionPolicyV1;
-  readonly inheritMcp: boolean;
+  readonly omaMcpConfigured: boolean;
 }
 
 /**
  * 將 canonical registry 投影成 Antigravity Markdown custom-agent frontmatter。
  * 只使用官方穩定 tool 名稱；invoke_subagent 僅在 capability-proven orchestrator 上暴露。
+ * Native orchestrator 使用目前文件化的 mcpServers frontmatter，不依賴 inheritMcp。
  */
 export function renderCanonicalAgent(
   id: unknown,
@@ -60,7 +61,13 @@ export function renderCanonicalAgent(
     `subagent: ${String(definition.subagent)}`,
     `model: ${definition.preferredModelTier}`,
     `commandExecutionPolicy: ${commandExecutionPolicy}`,
-    ...(nativeDelegationAvailable ? ['inheritMcp: true'] : []),
+    ...(nativeDelegationAvailable ? [
+      'mcpServers:',
+      '  oh-my-agy:',
+      '    command: oma',
+      '    args:',
+      '      - mcp-server',
+    ] : []),
     '---',
     '',
     canonicalAgentPromptV1(id, { nativeDelegationAvailable }).trim(),
@@ -71,7 +78,7 @@ export function renderCanonicalAgent(
     markdown: lines.join('\n'),
     tools,
     commandExecutionPolicy,
-    inheritMcp: nativeDelegationAvailable,
+    omaMcpConfigured: nativeDelegationAvailable,
   });
 }
 
