@@ -1,3 +1,6 @@
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import { CANONICAL_AGENT_ROLE_ALIASES_V1, resolveCanonicalAgentId } from '../agents/aliases';
 import {
   AgentInstallScopeV1,
@@ -7,9 +10,12 @@ import {
 import { CANONICAL_AGENT_REGISTRY_V1 } from '../agents/registry';
 import { CANONICAL_AGENT_IDS_V1 } from '../agents/types';
 import { HostCapabilityProfileV1 } from '../native/capability-profile';
+import { runBoundedProbe } from '../native/probes/runner';
 import { formatCliError } from '../runtime/error-catalog';
 import { RuntimeError, runtimeError } from '../runtime/errors';
 import { Result, err, ok } from '../runtime/types';
+import { PluginCommandAdapter } from '../setup/plugin';
+import { inspectNativeCapabilities } from './runtime-adapter';
 
 export type AgentCliCommandV1 =
   | { readonly kind: 'list'; readonly asJson: boolean }
@@ -21,6 +27,11 @@ export interface AgentCommandDependenciesV1 {
   readonly workspaceRoot: string;
   readonly homeDir?: string;
   readonly loadCapabilityProfile: () => Promise<Result<HostCapabilityProfileV1, RuntimeError>>;
+  readonly stdout: (value: string) => void;
+  readonly stderr: (value: string) => void;
+}
+
+export interface DefaultAgentCommandIoV1 {
   readonly stdout: (value: string) => void;
   readonly stderr: (value: string) => void;
 }
@@ -148,6 +159,55 @@ export async function runAgentCommand(
   return report.exitCode;
 }
 
+/** Production entrypoint using OMA's existing native capability inspector. */
+export async function runDefaultAgentCommand(
+  argv: readonly string[],
+  io: Readonly<DefaultAgentCommandIoV1> = {
+    stdout: (value) => process.stdout.write(value),
+    stderr: (value) => process.stderr.write(value),
+  },
+): Promise<number> {
+  const parsed = parseAgentCommand(argv);
+  if (!parsed.ok) {
+    io.stderr(formatCliError(parsed.error.code, parsed.error.message));
+    return 2;
+  }
+  const workspaceRoot = process.cwd();
+  const agyCommand = process.env.OMA_AGY_BIN?.trim() || 'agy';
+  const packageRoot = findPackageRoot(__dirname);
+  return runAgentCommand(parsed.value, {
+    workspaceRoot,
+    homeDir: os.homedir(),
+    stdout: io.stdout,
+    stderr: io.stderr,
+    loadCapabilityProfile: async () => {
+      try {
+        const inspected = await inspectNativeCapabilities({
+          agyCommand,
+          stateRoot: process.env.OMA_STATE_ROOT,
+          environment: process.env,
+          packageRoot,
+          pluginAdapter: boundedAgyPluginAdapter(agyCommand, workspaceRoot),
+          cwd: workspaceRoot,
+        }, false);
+        if (inspected.kind !== 'profile') {
+          return err(runtimeError(
+            'E_CAPABILITY_UNPROVEN',
+            inspected.diagnostics[0]?.message ?? 'Antigravity custom-agent capability profile is unavailable',
+          ));
+        }
+        return ok(inspected.profile);
+      } catch (cause) {
+        return err(runtimeError(
+          'E_CAPABILITY_UNPROVEN',
+          'Antigravity custom-agent capability inspection failed',
+          { cause: cause instanceof Error ? cause.message : String(cause) },
+        ));
+      }
+    },
+  });
+}
+
 function parseSimpleFormatCommand(
   kind: 'list',
   argv: readonly string[],
@@ -182,6 +242,40 @@ function parseScopedOptions(
   }
   if (scopeRequired && scope === undefined) return usage('agents install requires --scope project|user');
   return ok({ scope: scope ?? 'project', asJson });
+}
+
+function boundedAgyPluginAdapter(agyCommand: string, cwd: string): PluginCommandAdapter {
+  return {
+    async run(argv) {
+      const outcome = await runBoundedProbe({
+        command: agyCommand,
+        argv,
+        cwd,
+        environment: process.env,
+        timeoutMs: 5_000,
+        maximumOutputBytes: 64 * 1024,
+        maximumProcesses: 8,
+      });
+      return {
+        argv: [...argv],
+        code: outcome.timedOut ? 124 : outcome.status ?? 1,
+        stdout: outcome.stdout,
+        stderr: outcome.stderr || outcome.error || '',
+      };
+    },
+  };
+}
+
+function findPackageRoot(start: string): string {
+  let current = path.resolve(start);
+  for (let depth = 0; depth < 8; depth += 1) {
+    if (fs.existsSync(path.join(current, 'plugin.json'))
+      && fs.existsSync(path.join(current, 'package.json'))) return current;
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+  return path.resolve(start, '../..');
 }
 
 function usage<T = never>(message: string): Result<T, RuntimeError> {

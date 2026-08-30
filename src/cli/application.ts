@@ -33,6 +33,10 @@ Usage:
   oma skill list [--json|--text] [--all]
   oma skill show <name> [--json|--text]
   oma skill search <query> [--json|--text]
+  oma agents list [--json]
+  oma agents inspect <role> [--json]
+  oma agents install --scope project|user [--json]
+  oma agents doctor [--scope project|user] [--json]
   oma workflow install [--source <definition.json>]
   oma workflow list|native-status
   oma workflow run <name> --input <input.json> [--version <semver>] [--generation <n>]
@@ -136,6 +140,10 @@ export async function runCli(
       return services.doctorCommand(command.args);
     case 'skill':
       return services.skillCommand(command.args);
+    case 'agents': {
+      const { runDefaultAgentCommand } = await import('./agent-commands');
+      return runDefaultAgentCommand(command.args, io);
+    }
     case 'native':
       return services.nativeCommand(command.command, command.args);
     case 'extended':
