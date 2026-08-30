@@ -54,20 +54,16 @@ function supportedProfile(nativeDelegation = true) {
     diagnostic: null,
   }));
   if (nativeDelegation) {
-    observations.push(
-      {
-        capability: 'custom_agent.inherit_mcp', source: 'help', tier: 'observed', result: 'positive',
-        observedAt: now, identityDigest, detailCode: 'TEST_INHERIT_MCP', diagnostic: null,
-      },
-      {
-        capability: 'mcp.local_config', source: 'help', tier: 'observed', result: 'positive',
-        observedAt: now, identityDigest, detailCode: 'TEST_MCP_LOCAL', diagnostic: null,
-      },
-      {
-        capability: 'subagent.invoke', source: 'live_probe', tier: 'verified', result: 'positive',
-        observedAt: now, identityDigest, detailCode: 'TEST_SUBAGENT_INVOKE', diagnostic: null,
-      },
-    );
+    observations.push({
+      capability: 'subagent.invoke',
+      source: 'live_probe',
+      tier: 'verified',
+      result: 'positive',
+      observedAt: now,
+      identityDigest,
+      detailCode: 'TEST_SUBAGENT_INVOKE',
+      diagnostic: null,
+    });
   }
   return assembleHostCapabilityProfile({
     evaluationTimestamp: now,
@@ -102,8 +98,11 @@ describe('native agent installation', () => {
         'utf8',
       );
       expect(orchestrator).toContain('  - invoke_subagent');
-      expect(orchestrator).toContain('inheritMcp: true');
+      expect(orchestrator).toContain('mcpServers:\n  oh-my-agy:\n    command: oma');
+      expect(orchestrator).toContain('      - mcp-server');
+      expect(orchestrator).not.toContain('inheritMcp');
       expect(orchestrator).toContain('delegation.plan');
+      expect(orchestrator).toContain('delegation.reconcile');
       expect(fs.existsSync(path.join(first.value.agentsRoot, 'reviewer'))).toBe(false);
       expect(fs.existsSync(first.value.receiptPath)).toBe(true);
 
@@ -136,6 +135,7 @@ describe('native agent installation', () => {
         'utf8',
       );
       expect(orchestrator).not.toContain('invoke_subagent');
+      expect(orchestrator).not.toContain('mcpServers:');
       expect(orchestrator).not.toContain('delegation.plan');
       const doctor = doctorNativeAgentInstallation({
         scope: 'project', workspaceRoot: workspace, capabilityProfile: supportedProfile(false),
