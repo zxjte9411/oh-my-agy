@@ -1,5 +1,5 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-07-21 | Updated: 2026-08-31 -->
+<!-- Generated: 2026-07-21 | Updated: 2026-07-21 -->
 
 # workflows
 
@@ -12,15 +12,13 @@ GitHub Actions workflow definitions.
 | File | Description |
 |------|-------------|
 | `ci.yml` | Node 20/22 build + unit + pack smoke |
-| `release.yml` | Tag `v*` → deterministic verification + pack/checksum + fork GitHub Release readback |
+| `release.yml` | Tag `v*` → test + pack + GH Release + GitHub Packages |
 
 ## For AI Agents
 
 ### Working In This Directory
 
-- Tag version assert: package.json ≡ plugin.json ≡ Claude plugin/marketplace versions.
-- Release package identity is `@zxjte9411/oh-my-agy`; tarball identity is `zxjte9411-oh-my-agy-X.Y.Z.tgz`.
-- Do not remove e2e, checksum verification, existing-release rejection, or release readback without explicit product approval.
-- Do not add npmjs/GitHub Packages publishing here unless separately approved.
+- Tag version assert: package.json ≡ plugin.json (and .claude-plugin when checked).
+- Do not remove e2e from release without explicit product approval.
 
 <!-- MANUAL: -->
