@@ -410,7 +410,7 @@ export async function prepareWorkflowProductionProbeFromCli(
   const packageJson = JSON.parse(readBoundedRegularFile(
     path.join(packageRoot, 'package.json'), MAX_EVIDENCE_BYTES,
   ).toString('utf8')) as unknown;
-  if (!plainObject(packageJson) || packageJson.name !== '@iml1s/oh-my-agy'
+  if (!plainObject(packageJson) || packageJson.name !== '@zxjte9411/oh-my-agy'
     || typeof packageJson.version !== 'string') {
     throw new Error('workflow production probe package identity is invalid');
   }
@@ -711,7 +711,7 @@ async function runPluginProbe(context: Readonly<ProductionProbeContext>): Promis
     stdout,
     stderr,
     artifact: {
-      package_name: '@iml1s/oh-my-agy',
+      package_name: '@zxjte9411/oh-my-agy',
       plugin_name: 'oh-my-agy',
       doctor_exit_code: doctor.value.exitCode,
       plugin_check_status: pluginCheck.status,
@@ -1074,7 +1074,7 @@ function artifactValidator(
       'installed_version', 'registry_list_sha256', 'isolated_cwd_sha256',
       'fresh_process_pid', 'process_exit_code', 'process_signal', 'timed_out',
       'output_overflow', 'canary_output_sha256', 'canary_stderr_sha256'])
-      && value.package_name === '@iml1s/oh-my-agy' && value.plugin_name === 'oh-my-agy'
+      && value.package_name === '@zxjte9411/oh-my-agy' && value.plugin_name === 'oh-my-agy'
       && (value.doctor_exit_code === 0 || value.doctor_exit_code === 2)
       && value.plugin_check_status === 'pass'
       && value.public_cli_status === 'public_cli_observed'
@@ -1343,7 +1343,7 @@ function locateInstalledPackageRoot(start: string): string {
       const packageJson = JSON.parse(fs.readFileSync(path.join(current, 'package.json'), 'utf8')) as {
         name?: unknown;
       };
-      if (packageJson.name === '@iml1s/oh-my-agy'
+      if (packageJson.name === '@zxjte9411/oh-my-agy'
         && fs.existsSync(path.join(current, 'plugin.json'))) {
         return fs.realpathSync(current);
       }
