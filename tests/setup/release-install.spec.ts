@@ -280,7 +280,7 @@ describe('fresh-home release install attestation', () => {
     expect(fs.existsSync(path.join(scratch, 'must-not-exist'))).toBe(false);
   });
 
-  test('directory asset installs into isolated HOME/config/state and passes release doctor 0', async () => {
+  test('directory asset installs with hooks observation preserved as an advisory warning', async () => {
     const identity = computePackageIdentity(source);
     expect(identity.ok).toBe(true);
     if (!identity.ok) return;
@@ -297,7 +297,8 @@ describe('fresh-home release install attestation', () => {
     expect(result).toEqual(expect.objectContaining({
       ok: true,
       value: expect.objectContaining({
-        doctorExitCode: 0,
+        status: 'completed_with_warning',
+        doctorExitCode: 2,
         packageDigest: identity.value.digest,
         restoredPrior: false,
       }),
