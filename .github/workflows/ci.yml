@@ -80,3 +80,5 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: npm run test:e2e
+        env:
+          TEST_DIST: 'true'
