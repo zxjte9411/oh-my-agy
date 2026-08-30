@@ -6,7 +6,7 @@
 
 ### 1. 安裝相依項目
 ```bash
-npm install
+npm ci
 ```
 
 ### 2. 建置與編譯專案
@@ -22,11 +22,11 @@ npm run test:unit
 
 ### 4. 執行 E2E 測試
 ```bash
-npm run test:e2e
+TEST_DIST=true npm run test:e2e
 ```
 或單一階段：
 ```bash
-npx jest e2e/tier1.spec.ts --runInBand
+TEST_DIST=true npx jest e2e/tier1.spec.ts --runInBand
 ```
 
 ### 5. Package surface
@@ -39,12 +39,12 @@ npm run test:package
 npm run smoke
 npm run test:production
 ```
-`test:production` 不是一般 deterministic 測試；它需要七個 fresh、exact-Git-OID-bound live evidence。未提供時以 `E_PRODUCTION_EVIDENCE` exit 1 是正確的 fail-closed 行為。
+`test:production` 不是一般 deterministic 測試；它需要 fresh、exact-Git-OID-bound live evidence。未提供時以 `E_PRODUCTION_EVIDENCE` exit 1 是正確的 fail-closed 行為。
 
 ### 7. 新增 public composition surfaces
 
 * `src/workflows/*`：DAG / permission / replay / independent review；CLI adapter 必須保持薄層，不重做 state machine。
-* `src/mcp/*`：固定六個 read/proposal operations，禁止 generic command runner。
+* `src/mcp/*`：固定六個 public read/proposal operations，禁止 generic command runner；agent-private delegation MCP 不得擴張 public six-op surface。
 * `src/native/*`：只報 public evidence；不得從 UI 或 private files 推論 native team/workflow/LSP。
 * `src/continuation/recovery.ts`：partial recovery 必須保留 `W_BROKEN_CHAIN` / unknown-record warnings。
 * `src/setup/update.ts` / `uninstall.ts`：immutable, receipt-owned lifecycle。
@@ -64,5 +64,6 @@ npm run test:production
 * 禁止使用 `exec` 執行外部命令；必須使用 `spawn` / `spawnSync` 與引數陣列。
 * Circuit breaker **禁止** `git reset --hard` / `git clean -fd`。
 * 不得修改 `AGENTS.md`。
-* `.github/workflows/release.yml` 是 read-only verification；不得在沒有完整 live gate 與 external readback transaction 時加 publisher。
-* Registry publication 目前為空；不得宣稱 npmjs.org 或 GitHub Packages 已發布。
+* `v*` tag 是特權發布邊界：推 tag 前必須在 exact candidate OID 上完成 live production gate；`.github/workflows/release.yml` 只能在 deterministic gates 全綠後建立本 fork GitHub Release，且必須下載已發布 asset 做 external byte/checksum readback。
+* Release workflow 不得發布 npmjs.org 或 GitHub Packages；目前只允許 `zxjte9411/oh-my-agy` GitHub Release。
+* 不得宣稱 `@zxjte9411/oh-my-agy` 已存在於 npmjs.org 或 GitHub Packages。

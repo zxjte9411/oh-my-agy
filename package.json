@@ -1,7 +1,7 @@
 {
-  "name": "@iml1s/oh-my-agy",
-  "version": "0.6.0",
-  "description": "OMA — session slash skills (agy /autopilot; Claude/Grok /oh-my-agy:autopilot) + optional oma CLI ledger",
+  "name": "@zxjte9411/oh-my-agy",
+  "version": "0.7.0",
+  "description": "OMA — session slash skills (agy /autopilot; Claude/Grok /oh-my-agy:autopilot) + native agents + optional oma CLI ledger",
   "main": "dist/bin/oma.js",
   "exports": {
     ".": "./dist/bin/oma.js",
@@ -30,6 +30,8 @@
     "docs/readme",
     "CHANGELOG.md",
     "docs/RELEASE.md",
+    "docs/RELEASE.zh.md",
+    "docs/RELEASE.zh-TW.md",
     "docs/capabilities.md",
     "docs/native-capability-authority-ledger.md",
     "docs/native-capabilities.md",
@@ -68,12 +70,12 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/ImL1s/oh-my-agy.git"
+    "url": "git+https://github.com/zxjte9411/oh-my-agy.git"
   },
   "bugs": {
-    "url": "https://github.com/ImL1s/oh-my-agy/issues"
+    "url": "https://github.com/zxjte9411/oh-my-agy/issues"
   },
-  "homepage": "https://github.com/ImL1s/oh-my-agy#readme",
+  "homepage": "https://github.com/zxjte9411/oh-my-agy#readme",
   "keywords": [
     "antigravity",
     "agy",

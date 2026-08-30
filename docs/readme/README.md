@@ -1,39 +1,44 @@
-# oh-my-agy README translations
+# oh-my-agy (OMA / OMY)
 
-English | [简体中文](./README.zh.md) | [繁體中文](./README.zh-TW.md)
+English | [简体中文](README.zh.md) | [繁體中文](README.zh-TW.md)
 
-This folder holds the localized README files for oh-my-agy.
+This is the documentation mirror for the maintained fork **`zxjte9411/oh-my-agy`**. The canonical English README is [`../../README.md`](../../README.md).
 
-The repository root keeps only the canonical [`README.md`](../../README.md) so the top level stays focused on the primary entry point, package metadata, and project-wide documents.
+OMA keeps Google Antigravity CLI (`agy`) as the execution host and adds session skills, durable orchestration, Team/worktree safety, and seven native custom agents: `orchestrator`, `explorer`, `librarian`, `oracle`, `fixer`, `designer`, and `observer`.
 
-## Available translations
+The project originated from [`ImL1s/oh-my-agy`](https://github.com/ImL1s/oh-my-agy). Upstream is credited as lineage; installation and release assets for this fork come only from `zxjte9411/oh-my-agy`.
 
-| Language | File |
-| --- | --- |
-| English | [../../README.md](../../README.md) |
-| 简体中文 | [README.zh.md](./README.zh.md) |
-| 繁體中文 | [README.zh-TW.md](./README.zh-TW.md) |
+## Install
 
-## Translated docs
+Verified GitHub Release:
 
-| Topic | English | 简体中文 | 繁體中文 |
-| --- | --- | --- | --- |
-| Security model | [../security.md](../security.md) | [../security.zh.md](../security.zh.md) | [../security.zh-TW.md](../security.zh-TW.md) |
-| Repository workflows | [../workflows.md](../workflows.md) | [../workflows.zh.md](../workflows.zh.md) | [../workflows.zh-TW.md](../workflows.zh-TW.md) |
-| Capability matrix | [../capabilities.md](../capabilities.md) | [../capabilities.zh.md](../capabilities.zh.md) | [../capabilities.zh-TW.md](../capabilities.zh-TW.md) |
-| Release and installation | [../RELEASE.md](../RELEASE.md) | [../RELEASE.zh.md](../RELEASE.zh.md) | [../RELEASE.zh-TW.md](../RELEASE.zh-TW.md) |
+```bash
+curl -fsSLo /tmp/oma-install.sh \
+  https://raw.githubusercontent.com/zxjte9411/oh-my-agy/main/scripts/install.sh
+bash /tmp/oma-install.sh --github --tag v0.7.0
+```
 
-## Maintenance rules
+Source/development checkout:
 
-* Treat [`../../README.md`](../../README.md) as the canonical source.
-* Add new README translations in this folder, not at the repository root.
-* Keep the language list synchronized between the canonical README and each localized variant.
-* Keep relative links valid from `docs/readme/` (`assets` → `../../assets/`, `docs` → `../`, `LICENSE` / `CHANGELOG` → `../../`).
-* Prefer updating existing translations instead of introducing duplicate files or alternate naming schemes (use `.zh.md` / `.zh-TW.md` only — never `.zh-Hant.md`).
-* Agent/skill contracts (`AGENTS.md`, `skills/*/SKILL.md`) stay English; only human-facing catalog links should point here.
-* Preserve scope honesty: keep identifiers (`oma`, `omy`, `agy`, `Autopilot`, capability names) and do not strengthen isolation or native-runtime claims in translations.
+```bash
+git clone https://github.com/zxjte9411/oh-my-agy.git
+cd oh-my-agy
+bash scripts/install.sh --local-dev .
+```
 
-## Related docs
+The release asset is `zxjte9411-oh-my-agy-X.Y.Z.tgz` with `SHA256SUMS`. npmjs and GitHub Packages publication are intentionally disabled.
 
-* The canonical project entry point remains [`../../README.md`](../../README.md).
-* Locale policy for contributors: see [`../../CONTRIBUTING.md`](../../CONTRIBUTING.md).
+## Native agents
+
+```bash
+oma native probe --live
+oma agents list
+oma agents install --scope user
+oma agents doctor --scope user
+```
+
+For repository-local installation, use `oma agents install --scope project`.
+
+Restart Antigravity and use `/agents` to verify discovery.
+
+See [`../RELEASE.md`](../RELEASE.md) for release verification and [`../../README.md`](../../README.md) for the full command/reference guide.

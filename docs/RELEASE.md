@@ -1,121 +1,169 @@
-# Release and Installation
+# Release and installation
 
-English | [简体中文](./RELEASE.zh.md) | [繁體中文](./RELEASE.zh-TW.md)
+English | [简体中文](RELEASE.zh.md) | [繁體中文](RELEASE.zh-TW.md)
 
-## Current channel policy
+This document defines the release contract for the maintained fork **`zxjte9411/oh-my-agy`**.
 
-OMA `0.6.0` treats a GitHub Release tarball plus `SHA256SUMS` as the only
-installable release channel. The repository does **not** currently publish to
-npmjs.org or GitHub Packages. `@iml1s/oh-my-agy` is the package identity inside
-the tarball, not proof that a registry entry exists.
+## Distribution identity
 
-`.github/workflows/release.yml` is deliberately verification-only. It has
-read-only permissions and cannot create a tag, GitHub Release, asset, or package.
+- Repository: `zxjte9411/oh-my-agy`
+- Package metadata: `@zxjte9411/oh-my-agy`
+- GitHub tag: `vX.Y.Z`
+- GitHub Release tarball: `zxjte9411-oh-my-agy-X.Y.Z.tgz`
+- Checksum manifest: `SHA256SUMS`
+- npmjs: not published
+- GitHub Packages: not published
 
-`v0.5.0` is superseded by `v0.5.1`: its archive preserved the generated CLI as
-non-executable, so the installed `oma`/`omy` symlinks could not be invoked
-directly. Use `v0.5.1` or newer.
+The project originated from `ImL1s/oh-my-agy`, but upstream releases are not a supported installation source for this fork.
 
-## Install
+## Version synchronization
 
-The source checkout is the always-available path:
+Before a release, the exact version must agree across:
 
-```bash
-git clone https://github.com/ImL1s/oh-my-agy.git
-cd oh-my-agy
-./scripts/install.sh
-oma doctor --no-strict-plugin
+```text
+package.json
+plugin.json
+.claude-plugin/plugin.json
+.claude-plugin/marketplace.json
+.claude-plugin/marketplace.json plugins[name=oh-my-agy]
 ```
 
-After a GitHub Release is published, use the standalone verified bootstrap:
+For a tag workflow, `vX.Y.Z` must equal the manifest version `X.Y.Z`.
 
-```bash
-curl -fsSLo /tmp/oma-install.sh \
-  https://raw.githubusercontent.com/ImL1s/oh-my-agy/main/scripts/install.sh
-bash /tmp/oma-install.sh --github --tag vX.Y.Z
-```
+## Publication boundary
 
-For offline installation, supply the exact tarball and checksum manifest:
+Pushing a matching `vX.Y.Z` tag is the privileged publication decision. The release workflow may publish only when the tag is in `zxjte9411/oh-my-agy`.
 
-```bash
-bash /tmp/oma-install.sh \
-  --asset ./iml1s-oh-my-agy-X.Y.Z.tgz \
-  --checksums ./SHA256SUMS
-```
+Before pushing the tag, the operator must run the live production evidence gate against the exact candidate Git OID with a real authenticated Antigravity host. CI intentionally cannot manufacture that evidence.
 
-The offline mode performs no network, dependency-install, or build step.
-
-## Candidate verification
-
-Run from a clean candidate commit:
+Recommended pre-tag gates:
 
 ```bash
 npm ci
 npm run build
 npm run test:unit
-npm run test:e2e
+TEST_DIST=true npm run test:e2e
 npm run test:package
 npm run smoke
-npm pack --dry-run
+npm run test:production
 ```
 
-The deterministic gates require the built CLI to be executable and the
-fresh-home release installer tests invoke both `oma --version` and
-`omy --version` directly. Install preflight rejects an archive that loses the
-execute bit before any host mutation.
+`npm run test:production` is a live gate and should fail closed when fresh evidence is absent.
 
-`.claude-plugin/marketplace.json` top-level `version` and the plugin entry `version` must stay identical to `package.json`, or `oma doctor` `version_sync` fails the next cut.
+## GitHub Release workflow
 
-`npm run test:production` is a separate live gate. It accepts only fresh
-(within 24 hours), schema-v1 evidence bound to the exact candidate Git OID for:
+`.github/workflows/release.yml` runs on `v*` tags and can also be dispatched manually for verification. The tag path performs these steps in one verified workspace:
 
-- installed plugin discovery;
-- managed PreInvocation/Stop lifecycle;
-- exact conversation resume;
-- interactive and headless worker cleanup/delivery;
-- MCP visibility and public LSP status;
-- workflow DAG, replay, skeptic, verifier, and ship decision;
-- independent code review and UltraQA.
+1. `npm ci`
+2. build
+3. unit tests
+4. package tests
+5. compiled CLI E2E (`TEST_DIST=true`)
+6. smoke tests
+7. package/tag/manifest identity verification
+8. package readback verification
+9. confirmation that the production gate does not false-green without live evidence
+10. `npm pack --json --ignore-scripts`
+11. exact tarball-name verification
+12. `SHA256SUMS` creation and local checksum verification
+13. fail if the GitHub Release already exists
+14. create the GitHub Release with the tarball and `SHA256SUMS`
+15. download both published assets back
+16. byte-compare and re-check SHA-256
 
-Evidence is produced only by the product-owned probe/capture commands:
+The workflow does not publish to npmjs or GitHub Packages.
+
+## Verified GitHub Release installation
+
+Download the installer from this fork:
 
 ```bash
-# Omit --run-id to use OMA_PRODUCTION_RUN_ID, then the exact candidate OID.
-oma production probe plugin-discovery --run-id "$RUN_ID"
-oma production probe managed-lifecycle --run-id "$RUN_ID"
-oma production probe exact-resume --run-id "$RUN_ID"
-oma production probe worker-runtime --run-id "$RUN_ID"
-oma production probe mcp-lsp --run-id "$RUN_ID"
-oma production probe workflow --run-id "$RUN_ID"
-
-# These execute an actual allowlisted independent CLI. The command output must
-# contain exactly VERDICT: APPROVE or ULTRAQA: PASS, respectively.
-oma production capture review --run-id "$RUN_ID" -- codex <review-args>
-oma production capture ultraqa --run-id "$RUN_ID" -- claude <qa-args>
-oma production verify --run-id "$RUN_ID"
+curl -fsSLo /tmp/oma-install.sh \
+  https://raw.githubusercontent.com/zxjte9411/oh-my-agy/main/scripts/install.sh
 ```
 
-Receipts, canonical artifacts, and bounded transcripts are written beneath the
-platform state root at `production-evidence/<run-id>/`. The verifier accepts no
-caller-selected evidence path or claim JSON. It validates canonical bytes,
-owner-only modes, hashes, argv, exact candidate OID, freshness, and distinct
-review/UltraQA tool identities. Missing, stale, skipped, or mismatched evidence
-returns `E_PRODUCTION_EVIDENCE` and exits nonzero. Verification is read-only:
-missing evidence does not create the state root or run directory.
+Install the latest GitHub Release:
 
-## Publication boundary
+```bash
+bash /tmp/oma-install.sh --github
+```
 
-Only after deterministic checks, live evidence, independent review, and
-UltraQA pass may a privileged release operator push/read back the branch and
-tag, create a prerelease, upload the frozen tarball and `SHA256SUMS`, attest the
-bytes, promote it, and verify a fresh install. Any timeout is `unknown`, not
-success. Do not rebuild after freezing the bundle.
+Install an exact tag:
 
-`oma update --release` activates an already verified immutable package root.
-Because Antigravity installs same-name plugins with overlay semantics, the
-transaction first snapshots the registry-owned install, removes it, and then
-proves both registry and install-path absence before installing the staged
-candidate. Exact readback must pass; otherwise partial candidate bytes are
-removed before the snapshot is restored.
-`oma uninstall --receipt <path>` removes only receipt-owned inventory; `--purge`
-also requires the exact project-state path.
+```bash
+bash /tmp/oma-install.sh --github --tag v0.7.0
+```
+
+GitHub mode resolves only `zxjte9411/oh-my-agy` and expects the fork-owned release asset name.
+
+## Offline installation
+
+Using the release checksum manifest:
+
+```bash
+bash /tmp/oma-install.sh \
+  --asset ./zxjte9411-oh-my-agy-0.7.0.tgz \
+  --checksums ./SHA256SUMS
+```
+
+Or with an explicitly trusted SHA-256 digest:
+
+```bash
+bash /tmp/oma-install.sh \
+  --asset ./zxjte9411-oh-my-agy-0.7.0.tgz \
+  --asset-sha256 <64-hex-sha256>
+```
+
+Offline mode performs no network or npm/build step.
+
+## Source/development installation
+
+```bash
+git clone https://github.com/zxjte9411/oh-my-agy.git
+cd oh-my-agy
+bash scripts/install.sh --local-dev .
+```
+
+Local-dev is the only installer mode allowed to install dependencies and build candidate source.
+
+## Installer safety contract
+
+Release installation preserves these invariants:
+
+- release bytes are SHA-256 verified before extraction or execution;
+- release archives reject traversal, symlinks, and special entries;
+- extraction and staging use owner-only directories;
+- required runnable surfaces are checked before host mutation;
+- immutable package identity is computed before activation;
+- Antigravity plugin switching is performed through the existing transaction path;
+- doctor/readback failures cannot be hidden by auxiliary host success;
+- ownership receipts record the exact installed package/source identity;
+- soft advisory warnings do not erase the successful primary receipt;
+- update/uninstall ownership logic remains receipt-aware.
+
+Do not weaken these rules merely to make a release pass.
+
+## Native agents after install
+
+Once `oma` is installed and on `PATH`:
+
+```bash
+oma native probe --live
+oma agents install --scope user
+oma agents doctor --scope user
+```
+
+For a repository-local installation:
+
+```bash
+oma agents install --scope project
+oma agents doctor --scope project
+```
+
+Restart Antigravity and use `/agents` to verify discovery.
+
+## Registry policy
+
+Registry publication is intentionally disabled. The package name in `package.json` defines package/release identity and packed layout; it does not claim that `@zxjte9411/oh-my-agy` is available from npmjs or GitHub Packages.
+
+See [`npm-publishing.md`](npm-publishing.md) for the registry boundary.

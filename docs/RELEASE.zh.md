@@ -1,91 +1,80 @@
 # 发布与安装
 
-English: [RELEASE.md](./RELEASE.md) · [简体中文](./RELEASE.zh.md) · [繁體中文](./RELEASE.zh-TW.md)
-## 当前渠道策略
+[English](RELEASE.md) | 简体中文 | [繁體中文](RELEASE.zh-TW.md)
 
-OMA `0.6.0` 将 GitHub Release tarball 加 `SHA256SUMS` 视为唯一可安装的发布渠道。本仓库**目前不**发布到 npmjs.org 或 GitHub Packages。`@iml1s/oh-my-agy` 是 tarball 内的 package identity，不能证明 registry 条目存在。
+本文定义维护分支 **`zxjte9411/oh-my-agy`** 的正式发布契约。
 
-`.github/workflows/release.yml` 刻意仅做验证。它拥有只读权限，不能创建 tag、GitHub Release、asset 或 package。
+## 发布身份
 
-`v0.5.0` 已由 `v0.5.1` 取代：该 archive 保留了生成后 CLI 的不可执行权限，导致安装后的 `oma`/`omy` symlink 无法直接执行。请使用 `v0.5.1` 或更新版本。
+- Repository：`zxjte9411/oh-my-agy`
+- Package metadata：`@zxjte9411/oh-my-agy`
+- Tag：`vX.Y.Z`
+- Release 资产：`zxjte9411-oh-my-agy-X.Y.Z.tgz`
+- 校验文件：`SHA256SUMS`
+- npmjs / GitHub Packages：目前不发布
 
-## 安装
+项目源自 `ImL1s/oh-my-agy`，但上游 Release 不是本 fork 的安装来源。
 
-源码 checkout 是始终可用的路径：
+## 版本同步
 
-```bash
-git clone https://github.com/ImL1s/oh-my-agy.git
-cd oh-my-agy
-./scripts/install.sh
-oma doctor --no-strict-plugin
-```
+`package.json`、`plugin.json`、`.claude-plugin/plugin.json`、`.claude-plugin/marketplace.json` 以及 marketplace 中的 `oh-my-agy` 条目必须使用同一版本。Tag `vX.Y.Z` 必须对应版本 `X.Y.Z`。
 
-GitHub Release 发布后，使用独立的已验证 bootstrap：
+## 发布边界
 
-```bash
-curl -fsSLo /tmp/oma-install.sh \
-  https://raw.githubusercontent.com/ImL1s/oh-my-agy/main/scripts/install.sh
-bash /tmp/oma-install.sh --github --tag vX.Y.Z
-```
+推送匹配的 `vX.Y.Z` tag 即代表正式发布决策。推 tag 前，维护者必须在该候选 Git OID 上使用真实且已认证的 Antigravity 环境完成 live production evidence gate；CI 不会伪造 live evidence。
 
-离线安装时，提供精确的 tarball 与 checksum manifest：
-
-```bash
-bash /tmp/oma-install.sh \
-  --asset ./iml1s-oh-my-agy-X.Y.Z.tgz \
-  --checksums ./SHA256SUMS
-```
-
-离线模式不执行网络、依赖安装或 build 步骤。
-
-## 候选验证
-
-在干净的候选 commit 上运行：
+建议发布前执行：
 
 ```bash
 npm ci
 npm run build
 npm run test:unit
-npm run test:e2e
+TEST_DIST=true npm run test:e2e
 npm run test:package
 npm run smoke
-npm pack --dry-run
+npm run test:production
 ```
 
-确定性 gate 要求构建后的 CLI 可执行；全新 HOME 的 release installer 测试会直接执行 `oma --version` 与 `omy --version`。如果 archive 丢失 execute bit，install preflight 会在任何 host 变更前拒绝它。
+Release workflow 会再次执行 deterministic gates，确认 manifest/tag 一致，pack 出 `zxjte9411-oh-my-agy-X.Y.Z.tgz`，产生 `SHA256SUMS`，拒绝覆盖已存在的 Release，然后建立 GitHub Release，并将发布后的两个资产下载回来做 byte compare 与 SHA-256 校验。
 
-`npm run test:production` 是独立的 live gate。它仅接受新鲜（24 小时内）、schema-v1、且绑定精确候选 Git OID 的证据，涵盖：
-
-- 已安装 plugin discovery；
-- managed PreInvocation/Stop lifecycle；
-- exact conversation resume；
-- interactive 与 headless worker cleanup/delivery；
-- MCP visibility 与 public LSP status；
-- workflow DAG、replay、skeptic、verifier 与 ship decision；
-- independent code review 与 UltraQA。
-
-证据仅由产品拥有的 probe/capture 命令产生：
+## 安装 GitHub Release
 
 ```bash
-# 省略 --run-id 时使用 OMA_PRODUCTION_RUN_ID，再使用精确候选 OID。
-oma production probe plugin-discovery --run-id "$RUN_ID"
-oma production probe managed-lifecycle --run-id "$RUN_ID"
-oma production probe exact-resume --run-id "$RUN_ID"
-oma production probe worker-runtime --run-id "$RUN_ID"
-oma production probe mcp-lsp --run-id "$RUN_ID"
-oma production probe workflow --run-id "$RUN_ID"
-
-# 以下会执行实际的 allowlisted independent CLI。命令输出必须
-# 分别恰好包含 VERDICT: APPROVE 或 ULTRAQA: PASS。
-oma production capture review --run-id "$RUN_ID" -- codex <review-args>
-oma production capture ultraqa --run-id "$RUN_ID" -- claude <qa-args>
-oma production verify --run-id "$RUN_ID"
+curl -fsSLo /tmp/oma-install.sh \
+  https://raw.githubusercontent.com/zxjte9411/oh-my-agy/main/scripts/install.sh
+bash /tmp/oma-install.sh --github --tag v0.7.0
 ```
 
-Receipt、规范 artifact 与有界 transcript 写入平台 state root 下的 `production-evidence/<run-id>/`。verifier 不接受调用方选择的 evidence path 或 claim JSON。它验证规范字节、owner-only modes、hash、argv、精确候选 OID、新鲜度，以及不同的 review/UltraQA tool identity。缺失、过期、跳过或不匹配的证据返回 `E_PRODUCTION_EVIDENCE` 并以非零退出。验证为只读：缺失证据不会创建 state root 或 run 目录。
+若省略 `--tag`，installer 会从 `zxjte9411/oh-my-agy` 解析最新 GitHub Release。
 
-## 发布边界
+## 离线安装
 
-仅在确定性检查、live evidence、independent review 与 UltraQA 全部通过后，特权 release operator 才可 push/read back 分支与 tag、创建 prerelease、上传冻结的 tarball 与 `SHA256SUMS`、attest 字节、promote，并验证全新安装。任何 timeout 都是 `unknown`，不是 success。冻结 bundle 后不要 rebuild。
+```bash
+bash /tmp/oma-install.sh \
+  --asset ./zxjte9411-oh-my-agy-0.7.0.tgz \
+  --checksums ./SHA256SUMS
+```
 
-`oma update --release` 激活已验证的不可变 package root。`oma uninstall --receipt <path>` 仅移除 receipt-owned inventory；`--purge` 还需要精确的 project-state path。
+Release bytes 必须在解压或执行前完成 SHA-256 校验。Installer 仍保留 archive traversal/symlink 检查、0700 staging、candidate preflight、transactional plugin switch、doctor/readback 与 ownership receipt。
+
+## 源码 / 开发安装
+
+```bash
+git clone https://github.com/zxjte9411/oh-my-agy.git
+cd oh-my-agy
+bash scripts/install.sh --local-dev .
+```
+
+只有 local-dev 模式允许安装依赖与执行 build。
+
+## 安装 Native Agents
+
+```bash
+oma native probe --live
+oma agents install --scope user
+oma agents doctor --scope user
+```
+
+项目范围则使用 `--scope project`。完成后重启 Antigravity，并通过 `/agents` 验证发现结果。
+
+详细 registry 边界请参考 [`npm-publishing.md`](npm-publishing.md)。

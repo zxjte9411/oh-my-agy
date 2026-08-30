@@ -87,7 +87,7 @@ describe('product-owned production evidence', () => {
       stderr: '',
       artifact: {
         ...pluginDiscoveryArtifact(context),
-        package_name: '@iml1s/oh-my-agy',
+        package_name: '@zxjte9411/oh-my-agy',
         blessed_by_user: true,
       },
     })).toThrow(/not product-valid/u);
@@ -319,7 +319,7 @@ function writePluginEvidence(context: ProductionProbeContext, doctorExitCode = 0
 
 function pluginDiscoveryArtifact(context: ProductionProbeContext): Record<string, unknown> {
   return {
-    package_name: '@iml1s/oh-my-agy',
+    package_name: '@zxjte9411/oh-my-agy',
     plugin_name: 'oh-my-agy',
     doctor_exit_code: 0,
     plugin_check_status: 'pass',

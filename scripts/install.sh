@@ -16,8 +16,8 @@ Usage:
   bash install.sh [--github] [--tag vX.Y.Z]
 
   # Manual/offline: performs no network or dependency/build steps.
-  bash install.sh --asset ./iml1s-oh-my-agy-X.Y.Z.tgz --checksums ./SHA256SUMS
-  bash install.sh --asset ./iml1s-oh-my-agy-X.Y.Z.tgz --asset-sha256 <sha256>
+  bash install.sh --asset ./zxjte9411-oh-my-agy-X.Y.Z.tgz --checksums ./SHA256SUMS
+  bash install.sh --asset ./zxjte9411-oh-my-agy-X.Y.Z.tgz --asset-sha256 <sha256>
 
   # Checkout-only developer path (the only mode allowed to run npm/build).
   bash scripts/install.sh --local-dev [checkout]
@@ -51,6 +51,8 @@ CHECKSUMS_URL=""
 SOURCE_URI="${OMA_SOURCE_URI:-}"
 LOCAL_ROOT=""
 NO_AUXILIARY=-1
+RELEASE_REPOSITORY="zxjte9411/oh-my-agy"
+RELEASE_ASSET_PREFIX="zxjte9411-oh-my-agy"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -276,16 +278,16 @@ else
     if [[ -z "$RELEASE_TAG" ]]; then
       echo '==> resolve latest GitHub release to an exact tag'
       RELEASE_JSON="$WORK_ROOT/release.json"
-      download 'https://api.github.com/repos/ImL1s/oh-my-agy/releases/latest' "$RELEASE_JSON"
+      download "https://api.github.com/repos/$RELEASE_REPOSITORY/releases/latest" "$RELEASE_JSON"
       RELEASE_TAG="$(node -e 'const fs=require("fs");const v=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));if(typeof v.tag_name!=="string")process.exit(2);process.stdout.write(v.tag_name)' "$RELEASE_JSON")" \
         || die 'GitHub latest response has no exact tag'
     fi
     [[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$ ]] \
       || die 'release tag is not canonical semver'
     VERSION="${RELEASE_TAG#v}"
-    ASSET_NAME="iml1s-oh-my-agy-$VERSION.tgz"
-    ASSET_URL="${ASSET_URL:-https://github.com/ImL1s/oh-my-agy/releases/download/$RELEASE_TAG/$ASSET_NAME}"
-    CHECKSUMS_URL="${CHECKSUMS_URL:-https://github.com/ImL1s/oh-my-agy/releases/download/$RELEASE_TAG/SHA256SUMS}"
+    ASSET_NAME="$RELEASE_ASSET_PREFIX-$VERSION.tgz"
+    ASSET_URL="${ASSET_URL:-https://github.com/$RELEASE_REPOSITORY/releases/download/$RELEASE_TAG/$ASSET_NAME}"
+    CHECKSUMS_URL="${CHECKSUMS_URL:-https://github.com/$RELEASE_REPOSITORY/releases/download/$RELEASE_TAG/SHA256SUMS}"
     ASSET="$WORK_ROOT/$ASSET_NAME"
     CHECKSUMS="$WORK_ROOT/SHA256SUMS"
     echo "==> download exact release $RELEASE_TAG into 0700 staging"
@@ -299,10 +301,10 @@ else
   fi
 
   ASSET_BASENAME="$(basename "$ASSET")"
-  if [[ "$ASSET_BASENAME" =~ ^iml1s-oh-my-agy-((0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?)\.tgz$ ]]; then
+  if [[ "$ASSET_BASENAME" =~ ^zxjte9411-oh-my-agy-((0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?)\.tgz$ ]]; then
     ARCHIVE_VERSION="${BASH_REMATCH[1]}"
   else
-    die 'release asset name must be iml1s-oh-my-agy-<semver>.tgz'
+    die 'release asset name must be zxjte9411-oh-my-agy-<semver>.tgz'
   fi
   RELEASE_TAG="${RELEASE_TAG:-v$ARCHIVE_VERSION}"
   [[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$ ]] \
