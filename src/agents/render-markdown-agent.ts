@@ -15,6 +15,10 @@ const READ_WRITE_TOOLS = Object.freeze([
   'replace_file_content',
   'run_command',
 ] as const);
+const NATIVE_ORCHESTRATOR_TOOLS = Object.freeze([
+  ...READ_WRITE_TOOLS,
+  'invoke_subagent',
+] as const);
 
 export interface RenderCanonicalAgentOptionsV1 {
   readonly nativeDelegationAvailable?: boolean;
@@ -25,11 +29,12 @@ export interface RenderedNativeAgentV1 {
   readonly markdown: string;
   readonly tools: readonly string[];
   readonly commandExecutionPolicy: NativeAgentCommandExecutionPolicyV1;
+  readonly inheritMcp: boolean;
 }
 
 /**
  * 將 canonical registry 投影成 Antigravity Markdown custom-agent frontmatter。
- * 只使用官方穩定 tool 名稱，避免未知 tool 造成 native subagent hang。
+ * 只使用官方穩定 tool 名稱；invoke_subagent 僅在 capability-proven orchestrator 上暴露。
  */
 export function renderCanonicalAgent(
   id: unknown,
@@ -39,7 +44,11 @@ export function renderCanonicalAgent(
     throw new Error(`Cannot render non-canonical agent role: ${String(id)}`);
   }
   const definition = canonicalAgentDefinition(id);
-  const tools = toolsForCapability(definition.capabilityFloor);
+  const nativeDelegationAvailable = id === 'orchestrator'
+    && options.nativeDelegationAvailable === true;
+  const tools = nativeDelegationAvailable
+    ? NATIVE_ORCHESTRATOR_TOOLS
+    : toolsForCapability(definition.capabilityFloor);
   const commandExecutionPolicy = definition.capabilityFloor === 'read-only' ? 'off' : 'sandbox';
   const lines = [
     '---',
@@ -51,9 +60,10 @@ export function renderCanonicalAgent(
     `subagent: ${String(definition.subagent)}`,
     `model: ${definition.preferredModelTier}`,
     `commandExecutionPolicy: ${commandExecutionPolicy}`,
+    ...(nativeDelegationAvailable ? ['inheritMcp: true'] : []),
     '---',
     '',
-    canonicalAgentPromptV1(id, options).trim(),
+    canonicalAgentPromptV1(id, { nativeDelegationAvailable }).trim(),
     '',
   ];
   return Object.freeze({
@@ -61,6 +71,7 @@ export function renderCanonicalAgent(
     markdown: lines.join('\n'),
     tools,
     commandExecutionPolicy,
+    inheritMcp: nativeDelegationAvailable,
   });
 }
 

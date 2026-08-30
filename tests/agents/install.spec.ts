@@ -23,12 +23,12 @@ const REQUIRED = [
   'custom_agent.command_execution_policy',
 ] as const;
 
-function supportedProfile() {
+function supportedProfile(nativeDelegation = true) {
   const now = '2026-08-30T00:00:00.000Z';
   const host: HostIdentityV1 = {
     realpath: '/usr/local/bin/agy',
     binarySha256: 'a'.repeat(64),
-    version: '1.1.6',
+    version: '1.1.11',
     versionOutputSha256: 'b'.repeat(64),
     helpOutputSha256: 'c'.repeat(64),
     platform: 'linux',
@@ -53,6 +53,22 @@ function supportedProfile() {
     detailCode: 'TEST_SUPPORTED',
     diagnostic: null,
   }));
+  if (nativeDelegation) {
+    observations.push(
+      {
+        capability: 'custom_agent.inherit_mcp', source: 'help', tier: 'observed', result: 'positive',
+        observedAt: now, identityDigest, detailCode: 'TEST_INHERIT_MCP', diagnostic: null,
+      },
+      {
+        capability: 'mcp.local_config', source: 'help', tier: 'observed', result: 'positive',
+        observedAt: now, identityDigest, detailCode: 'TEST_MCP_LOCAL', diagnostic: null,
+      },
+      {
+        capability: 'subagent.invoke', source: 'live_probe', tier: 'verified', result: 'positive',
+        observedAt: now, identityDigest, detailCode: 'TEST_SUBAGENT_INVOKE', diagnostic: null,
+      },
+    );
+  }
   return assembleHostCapabilityProfile({
     evaluationTimestamp: now,
     hostIdentityBefore: host,
@@ -64,7 +80,7 @@ function supportedProfile() {
 }
 
 describe('native agent installation', () => {
-  test('installs only canonical project agents and is idempotent by ownership receipt', () => {
+  test('installs capability-proven orchestrator delegation and is idempotent by ownership receipt', () => {
     const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'oma-agent-project-'));
     try {
       const first = installNativeAgents({
@@ -77,9 +93,17 @@ describe('native agent installation', () => {
       expect(first.ok).toBe(true);
       if (!first.ok) return;
       expect(first.value.idempotent).toBe(false);
+      expect(first.value.delegation.status).toBe('available');
       for (const id of CANONICAL_AGENT_IDS_V1) {
         expect(fs.existsSync(path.join(first.value.agentsRoot, id, 'agent.md'))).toBe(true);
       }
+      const orchestrator = fs.readFileSync(
+        path.join(first.value.agentsRoot, 'orchestrator', 'agent.md'),
+        'utf8',
+      );
+      expect(orchestrator).toContain('  - invoke_subagent');
+      expect(orchestrator).toContain('inheritMcp: true');
+      expect(orchestrator).toContain('delegation.plan');
       expect(fs.existsSync(path.join(first.value.agentsRoot, 'reviewer'))).toBe(false);
       expect(fs.existsSync(first.value.receiptPath)).toBe(true);
 
@@ -88,9 +112,37 @@ describe('native agent installation', () => {
       });
       expect(second.ok).toBe(true);
       if (second.ok) expect(second.value.idempotent).toBe(true);
-      expect(doctorNativeAgentInstallation({
+      const doctor = doctorNativeAgentInstallation({
         scope: 'project', workspaceRoot: workspace, capabilityProfile: supportedProfile(),
-      }).status).toBe('healthy');
+      });
+      expect(doctor.status).toBe('healthy');
+      expect(doctor.delegation.status).toBe('available');
+    } finally {
+      fs.rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test('installs non-delegating agents but reports unsupported when native invoke is unproven', () => {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'oma-agent-no-delegation-'));
+    try {
+      const installed = installNativeAgents({
+        scope: 'project', workspaceRoot: workspace, capabilityProfile: supportedProfile(false),
+      });
+      expect(installed.ok).toBe(true);
+      if (!installed.ok) return;
+      expect(installed.value.delegation.status).toBe('unavailable');
+      const orchestrator = fs.readFileSync(
+        path.join(installed.value.agentsRoot, 'orchestrator', 'agent.md'),
+        'utf8',
+      );
+      expect(orchestrator).not.toContain('invoke_subagent');
+      expect(orchestrator).not.toContain('delegation.plan');
+      const doctor = doctorNativeAgentInstallation({
+        scope: 'project', workspaceRoot: workspace, capabilityProfile: supportedProfile(false),
+      });
+      expect(doctor.status).toBe('unsupported');
+      expect(doctor.exitCode).toBe(1);
+      expect(doctor.delegation.diagnostic).toContain('subagent.invoke');
     } finally {
       fs.rmSync(workspace, { recursive: true, force: true });
     }

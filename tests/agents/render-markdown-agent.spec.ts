@@ -24,8 +24,10 @@ describe('native Markdown agent rendering', () => {
       const rendered = renderCanonicalAgent(id);
       expect(rendered.tools).toEqual(['view_file', 'grep_search']);
       expect(rendered.commandExecutionPolicy).toBe('off');
+      expect(rendered.inheritMcp).toBe(false);
       expect(rendered.markdown).not.toContain('replace_file_content');
       expect(rendered.markdown).not.toContain('run_command');
+      expect(rendered.markdown).not.toContain('invoke_subagent');
     }
 
     for (const id of ['orchestrator', 'fixer', 'designer'] as const) {
@@ -34,13 +36,34 @@ describe('native Markdown agent rendering', () => {
         'view_file', 'grep_search', 'replace_file_content', 'run_command',
       ]);
       expect(rendered.commandExecutionPolicy).toBe('sandbox');
+      expect(rendered.inheritMcp).toBe(false);
     }
   });
 
-  test('uses the modular prompt registry without changing the current orchestrator posture', () => {
+  test('enables native delegation only on a capability-proven orchestrator', () => {
+    const orchestrator = renderCanonicalAgent('orchestrator', { nativeDelegationAvailable: true });
+    expect(orchestrator.tools).toEqual([
+      'view_file', 'grep_search', 'replace_file_content', 'run_command', 'invoke_subagent',
+    ]);
+    expect(orchestrator.inheritMcp).toBe(true);
+    expect(orchestrator.markdown).toContain('  - invoke_subagent');
+    expect(orchestrator.markdown).toContain('inheritMcp: true');
+    expect(orchestrator.markdown).toContain('delegation.plan');
+    expect(orchestrator.markdown).toContain('workspace: inherit');
+
+    for (const id of CANONICAL_AGENT_IDS_V1.filter((agentId) => agentId !== 'orchestrator')) {
+      const child = renderCanonicalAgent(id, { nativeDelegationAvailable: true });
+      expect(child.tools).not.toContain('invoke_subagent');
+      expect(child.inheritMcp).toBe(false);
+    }
+  });
+
+  test('keeps the non-native orchestrator on its base posture when capability is unavailable', () => {
     const orchestrator = renderCanonicalAgent('orchestrator');
     expect(orchestrator.markdown).toContain("You are OMA's orchestration-focused main agent.");
     expect(orchestrator.markdown).toContain('Native subagent routing policy is owned by OMA orchestration');
+    expect(orchestrator.markdown).not.toContain('delegation.plan');
+    expect(orchestrator.markdown).not.toContain('invoke_subagent');
   });
 
   test('does not render legacy aliases as additional visible agents', () => {

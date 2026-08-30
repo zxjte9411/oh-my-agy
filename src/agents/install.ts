@@ -12,6 +12,10 @@ import {
 import { atomicWriteFile, atomicWriteJson, sha256 } from '../runtime/atomic';
 import { RuntimeError, runtimeError } from '../runtime/errors';
 import { Result, err, ok } from '../runtime/types';
+import {
+  NativeDelegationCapabilityV1,
+  assessNativeDelegationCapability,
+} from './orchestration';
 import { renderAllCanonicalAgents } from './render-markdown-agent';
 import { CANONICAL_AGENT_IDS_V1, CanonicalAgentIdV1 } from './types';
 
@@ -56,6 +60,7 @@ export interface NativeAgentInstallResultV1 {
   readonly receiptPath: string;
   readonly idempotent: boolean;
   readonly receipt: AgentInstallReceiptV1;
+  readonly delegation: NativeDelegationCapabilityV1;
 }
 
 export interface NativeAgentDoctorReportV1 {
@@ -65,6 +70,7 @@ export interface NativeAgentDoctorReportV1 {
   readonly status: 'healthy' | 'missing' | 'drifted' | 'unsupported';
   readonly exitCode: 0 | 1;
   readonly diagnostics: readonly string[];
+  readonly delegation: NativeDelegationCapabilityV1;
 }
 
 export function resolveNativeAgentRoot(
@@ -122,11 +128,13 @@ export function installNativeAgents(
 ): Result<NativeAgentInstallResultV1, RuntimeError> {
   const capability = validateNativeAgentCapabilityProfile(options.capabilityProfile);
   if (!capability.ok) return capability;
+  const delegation = assessNativeDelegationCapability(capability.value);
+  const nativeDelegationAvailable = delegation.status === 'available';
   const agentsRoot = resolveNativeAgentRoot(options.scope, options.workspaceRoot, options.homeDir);
   const receiptPath = path.join(agentsRoot, '.oma', 'receipt.json');
   const safeRoot = validateAgentsRoot(agentsRoot);
   if (!safeRoot.ok) return safeRoot;
-  const desired = renderAllCanonicalAgents().map((agent) => ({
+  const desired = renderAllCanonicalAgents({ nativeDelegationAvailable }).map((agent) => ({
     id: agent.id,
     relativePath: `${agent.id}/agent.md`,
     targetPath: path.join(agentsRoot, agent.id, 'agent.md'),
@@ -156,6 +164,7 @@ export function installNativeAgents(
         receiptPath,
         idempotent: true,
         receipt: previousReceipt.value,
+        delegation,
       });
     }
   }
@@ -181,7 +190,14 @@ export function installNativeAgents(
     if (!verified.ok || verified.value === null || verified.value.receiptDigest !== receipt.receiptDigest) {
       throw new Error(verified.ok ? 'agent receipt read-back failed' : verified.error.message);
     }
-    return ok({ scope: options.scope, agentsRoot, receiptPath, idempotent: false, receipt });
+    return ok({
+      scope: options.scope,
+      agentsRoot,
+      receiptPath,
+      idempotent: false,
+      receipt,
+      delegation,
+    });
   } catch (cause) {
     try {
       restoreSnapshot(snapshot);
@@ -208,6 +224,7 @@ export function doctorNativeAgentInstallation(
 ): NativeAgentDoctorReportV1 {
   const agentsRoot = resolveNativeAgentRoot(options.scope, options.workspaceRoot, options.homeDir);
   const receiptPath = path.join(agentsRoot, '.oma', 'receipt.json');
+  const delegation = assessNativeDelegationCapability(options.capabilityProfile);
   const capability = validateNativeAgentCapabilityProfile(options.capabilityProfile);
   if (!capability.ok) {
     return {
@@ -217,8 +234,10 @@ export function doctorNativeAgentInstallation(
       status: 'unsupported',
       exitCode: 1,
       diagnostics: [capability.error.message],
+      delegation,
     };
   }
+  const nativeDelegationAvailable = delegation.status === 'available';
   const safeRoot = validateAgentsRoot(agentsRoot);
   if (!safeRoot.ok) {
     return {
@@ -228,6 +247,7 @@ export function doctorNativeAgentInstallation(
       status: 'drifted',
       exitCode: 1,
       diagnostics: [safeRoot.error.message],
+      delegation,
     };
   }
   const receipt = readReceipt(receiptPath, options.scope);
@@ -239,6 +259,7 @@ export function doctorNativeAgentInstallation(
       status: 'drifted',
       exitCode: 1,
       diagnostics: [receipt.error.message],
+      delegation,
     };
   }
   if (receipt.value === null) {
@@ -249,6 +270,7 @@ export function doctorNativeAgentInstallation(
       status: 'missing',
       exitCode: 1,
       diagnostics: ['OMA native agent ownership receipt is missing'],
+      delegation,
     };
   }
   const owned = verifyOwnedFiles(agentsRoot, receipt.value);
@@ -260,9 +282,11 @@ export function doctorNativeAgentInstallation(
       status: 'drifted',
       exitCode: 1,
       diagnostics: [owned.error.message],
+      delegation,
     };
   }
-  const desired = new Map(renderAllCanonicalAgents().map((agent) => [agent.id, sha256(agent.markdown)]));
+  const desired = new Map(renderAllCanonicalAgents({ nativeDelegationAvailable })
+    .map((agent) => [agent.id, sha256(agent.markdown)]));
   const stale = receipt.value.files.filter((file) => desired.get(file.id) !== file.sha256).map(({ id }) => id);
   if (stale.length > 0) {
     return {
@@ -271,7 +295,22 @@ export function doctorNativeAgentInstallation(
       receiptPath,
       status: 'drifted',
       exitCode: 1,
-      diagnostics: [`Installed native agents are stale: ${stale.join(', ')}`],
+      diagnostics: [
+        `Installed native agents are stale: ${stale.join(', ')}`,
+        ...(delegation.diagnostic === null ? [] : [delegation.diagnostic]),
+      ],
+      delegation,
+    };
+  }
+  if (delegation.status !== 'available') {
+    return {
+      scope: options.scope,
+      agentsRoot,
+      receiptPath,
+      status: 'unsupported',
+      exitCode: 1,
+      diagnostics: [delegation.diagnostic ?? 'Native subagent delegation is unavailable'],
+      delegation,
     };
   }
   return {
@@ -281,6 +320,7 @@ export function doctorNativeAgentInstallation(
     status: 'healthy',
     exitCode: 0,
     diagnostics: [],
+    delegation,
   };
 }
 
