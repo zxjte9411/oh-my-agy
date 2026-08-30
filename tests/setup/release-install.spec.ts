@@ -31,7 +31,7 @@ function surface(root: string, version: string, marker = version): void {
   fs.mkdirSync(path.join(root, 'skills', 'autopilot'), { recursive: true });
   fs.mkdirSync(path.join(root, 'rules'), { recursive: true });
   fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({
-    name: '@iml1s/oh-my-agy', version,
+    name: '@zxjte9411/oh-my-agy', version,
     bin: { oma: 'dist/bin/oma.js', omy: 'dist/bin/oma.js' },
     files: [
       'dist/bin', 'dist/src', 'plugin.json', 'hooks.json', '.claude-plugin',
@@ -189,7 +189,7 @@ done
 [[ -n "$out" && -n "$url" ]] || exit 93
 case "$url" in
   */SHA256SUMS) cp "$OMA_TEST_CHECKSUMS" "$out" ;;
-  */iml1s-oh-my-agy-*.tgz) cp "$OMA_TEST_ASSET" "$out" ;;
+  */zxjte9411-oh-my-agy-*.tgz) cp "$OMA_TEST_ASSET" "$out" ;;
   *) exit 94 ;;
 esac
 `);
@@ -354,7 +354,10 @@ describe('fresh-home release install attestation', () => {
     expect(body).toContain('dist/src/setup/update.js');
     expect(body).toContain('--preflight-only');
     expect(body).toContain('--local-dev');
-    expect(body).toContain('iml1s-oh-my-agy-$VERSION.tgz');
+    expect(body).toContain('RELEASE_REPOSITORY="zxjte9411/oh-my-agy"');
+    expect(body).toContain('RELEASE_ASSET_PREFIX="zxjte9411-oh-my-agy"');
+    expect(body).not.toContain('ImL1s/oh-my-agy');
+    expect(body).not.toContain('iml1s-oh-my-agy-');
     expect(body).not.toMatch(/doctor[^\n]*\|\|\s*true/);
     expect(body).not.toContain('ln -sfn');
     expect(body).toContain('PRIMARY_STATUS');
@@ -391,7 +394,7 @@ describe('standalone and offline install shell acceptance', () => {
     suiteRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'oma-install-shell-'));
     const releaseRoot = path.join(suiteRoot, 'release-package');
     copyShippingPackage(releaseRoot);
-    asset = path.join(suiteRoot, `iml1s-oh-my-agy-${version}.tgz`);
+    asset = path.join(suiteRoot, `zxjte9411-oh-my-agy-${version}.tgz`);
     archive(releaseRoot, asset);
     const digest = verifyReleaseAssetChecksum(asset);
     if (!digest.ok) throw new Error(digest.error.message);
@@ -508,8 +511,9 @@ describe('standalone and offline install shell acceptance', () => {
     expectAdvisoryReleaseSuccess(result);
     expect(fs.existsSync(path.join(root, 'npm.log'))).toBe(false);
     const curlLog = fs.readFileSync(path.join(root, 'curl.log'), 'utf8');
-    expect(curlLog).toContain(`/releases/download/v${version}/iml1s-oh-my-agy-${version}.tgz`);
+    expect(curlLog).toContain(`/releases/download/v${version}/zxjte9411-oh-my-agy-${version}.tgz`);
     expect(curlLog).toContain(`/releases/download/v${version}/SHA256SUMS`);
+    expect(curlLog).not.toContain('ImL1s/oh-my-agy');
     const receipt = readInstallReceipt(installReceiptPaths(harness.state)[0]);
     expect(receipt).toEqual(expect.objectContaining({
       ok: true,
@@ -517,7 +521,7 @@ describe('standalone and offline install shell acceptance', () => {
         source: expect.objectContaining({
           assetSha256: assetDigest,
           tag: `v${version}`,
-          uri: `https://github.com/ImL1s/oh-my-agy/releases/download/v${version}/iml1s-oh-my-agy-${version}.tgz`,
+          uri: `https://github.com/zxjte9411/oh-my-agy/releases/download/v${version}/zxjte9411-oh-my-agy-${version}.tgz`,
         }),
       }),
     }));
@@ -542,7 +546,7 @@ describe('standalone and offline install shell acceptance', () => {
   test('valid checksum with mismatched asset/package version fails before host mutation', () => {
     const root = path.join(suiteRoot, 'version-failure');
     fs.mkdirSync(root, { recursive: true, mode: 0o700 });
-    const wrongName = path.join(root, 'iml1s-oh-my-agy-9.9.9.tgz');
+    const wrongName = path.join(root, 'zxjte9411-oh-my-agy-9.9.9.tgz');
     fs.copyFileSync(asset, wrongName);
     const manifest = path.join(root, 'SHA256SUMS');
     fs.writeFileSync(manifest, `${assetDigest}  ${path.basename(wrongName)}\n`);
@@ -561,7 +565,7 @@ describe('standalone and offline install shell acceptance', () => {
     const releaseRoot = path.join(root, 'release-package');
     copyShippingPackage(releaseRoot);
     fs.rmSync(path.join(releaseRoot, 'dist', 'src', 'setup', 'update.js'));
-    const badAsset = path.join(root, `iml1s-oh-my-agy-${version}.tgz`);
+    const badAsset = path.join(root, `zxjte9411-oh-my-agy-${version}.tgz`);
     archive(releaseRoot, badAsset);
     const digest = verifyReleaseAssetChecksum(badAsset);
     expect(digest.ok).toBe(true);
