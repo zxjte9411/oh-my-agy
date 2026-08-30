@@ -98,8 +98,9 @@ describe('native agent installation', () => {
         'utf8',
       );
       expect(orchestrator).toContain('  - invoke_subagent');
-      expect(orchestrator).toContain('mcpServers:\n  oh-my-agy:\n    command: oma');
-      expect(orchestrator).toContain('      - mcp-server');
+      expect(orchestrator).toContain('mcpServers:\n  oh-my-agy-agents:\n    command: oma');
+      expect(orchestrator).toContain('      - agents\n      - mcp-server');
+      expect(orchestrator).not.toContain('mcpServers:\n  oh-my-agy:\n');
       expect(orchestrator).not.toContain('inheritMcp');
       expect(orchestrator).toContain('delegation.plan');
       expect(orchestrator).toContain('delegation.reconcile');
