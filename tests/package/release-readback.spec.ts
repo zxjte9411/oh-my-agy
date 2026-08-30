@@ -5,7 +5,7 @@ import * as path from 'path';
 
 const root = path.resolve(__dirname, '../..');
 
-describe('0.6.0 release readback', () => {
+describe('0.7.0 release readback', () => {
   test('all public manifests and the workflow skill inventory agree', () => {
     const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
     const plugin = JSON.parse(fs.readFileSync(path.join(root, 'plugin.json'), 'utf8'));
@@ -13,11 +13,15 @@ describe('0.6.0 release readback', () => {
     const marketplace = JSON.parse(
       fs.readFileSync(path.join(root, '.claude-plugin', 'marketplace.json'), 'utf8'),
     ) as { version?: string; plugins?: Array<{ name?: string; version?: string }> };
-    expect(pkg.version).toBe('0.6.0');
+    expect(pkg.name).toBe('@zxjte9411/oh-my-agy');
+    expect(pkg.version).toBe('0.7.0');
     expect(plugin.version).toBe(pkg.version);
     expect(slash.version).toBe(pkg.version);
     expect(marketplace.version).toBe(pkg.version);
     expect(marketplace.plugins?.find((entry) => entry.name === 'oh-my-agy')?.version).toBe(pkg.version);
+    expect(pkg.repository?.url).toBe('git+https://github.com/zxjte9411/oh-my-agy.git');
+    expect(pkg.bugs?.url).toBe('https://github.com/zxjte9411/oh-my-agy/issues');
+    expect(pkg.homepage).toBe('https://github.com/zxjte9411/oh-my-agy#readme');
     expect(pkg.exports).toEqual({
       '.': './dist/bin/oma.js',
       './package.json': './package.json',
@@ -30,6 +34,8 @@ describe('0.6.0 release readback', () => {
       'scripts/install.sh',
       'tests/fixtures/workflow',
       'docs/RELEASE.md',
+      'docs/RELEASE.zh.md',
+      'docs/RELEASE.zh-TW.md',
       'docs/capabilities.md',
       'docs/native-capability-authority-ledger.md',
       'docs/native-capabilities.md',
@@ -81,7 +87,7 @@ describe('0.6.0 release readback', () => {
       const packedReadme = fs.readFileSync(path.join(
         temporary,
         'node_modules',
-        '@iml1s',
+        '@zxjte9411',
         'oh-my-agy',
         'README.md',
       ), 'utf8');
@@ -92,8 +98,8 @@ describe('0.6.0 release readback', () => {
       const consumer = spawnSync(process.execPath, ['-e', `
         const path = require('path');
         for (const moduleName of [
-          '@iml1s/oh-my-agy/dist/src/workflows/runner',
-          '@iml1s/oh-my-agy/dist/src/production/evidence',
+          '@zxjte9411/oh-my-agy/dist/src/workflows/runner',
+          '@zxjte9411/oh-my-agy/dist/src/production/evidence',
         ]) {
           try {
             require.resolve(moduleName);
@@ -102,7 +108,7 @@ describe('0.6.0 release readback', () => {
             if (!error || error.code !== 'ERR_PACKAGE_PATH_NOT_EXPORTED') process.exit(11);
           }
         }
-        const packageRoot = path.dirname(require.resolve('@iml1s/oh-my-agy/package.json'));
+        const packageRoot = path.dirname(require.resolve('@zxjte9411/oh-my-agy/package.json'));
         const workflowRoot = path.join(packageRoot, 'dist/src/workflows');
         const exportAllowlists = {
           'antigravity-adapter.js': [
@@ -206,6 +212,8 @@ describe('0.6.0 release readback', () => {
       'skills/workflow/SKILL.md',
       'tests/fixtures/workflow/production-safety-review-v1.json',
       'docs/RELEASE.md',
+      'docs/RELEASE.zh.md',
+      'docs/RELEASE.zh-TW.md',
       'docs/capabilities.md',
       'docs/native-capability-authority-ledger.md',
       'docs/native-capabilities.md',
