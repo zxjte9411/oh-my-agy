@@ -175,6 +175,7 @@ export function installNativeAgents(
     }
     const files = desired.map(({ id, relativePath, digest }) => ({ id, path: relativePath, sha256: digest }));
     const receipt = buildReceipt(options.scope, transactionId, installedAt, files);
+    assertNoSymlinkComponents(receiptPath);
     atomicWriteJson(receiptPath, receipt, { mode: 0o600, transactionId });
     const verified = readReceipt(receiptPath, options.scope);
     if (!verified.ok || verified.value === null || verified.value.receiptDigest !== receipt.receiptDigest) {
@@ -216,6 +217,17 @@ export function doctorNativeAgentInstallation(
       status: 'unsupported',
       exitCode: 1,
       diagnostics: [capability.error.message],
+    };
+  }
+  const safeRoot = validateAgentsRoot(agentsRoot);
+  if (!safeRoot.ok) {
+    return {
+      scope: options.scope,
+      agentsRoot,
+      receiptPath,
+      status: 'drifted',
+      exitCode: 1,
+      diagnostics: [safeRoot.error.message],
     };
   }
   const receipt = readReceipt(receiptPath, options.scope);
@@ -292,8 +304,9 @@ function readReceipt(
   receiptPath: string,
   scope: AgentInstallScopeV1,
 ): Result<AgentInstallReceiptV1 | null, RuntimeError> {
-  if (!fs.existsSync(receiptPath)) return ok(null);
   try {
+    assertNoSymlinkComponents(receiptPath);
+    if (!fs.existsSync(receiptPath)) return ok(null);
     const stat = fs.lstatSync(receiptPath);
     if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('receipt is not a regular file');
     const value = JSON.parse(fs.readFileSync(receiptPath, 'utf8')) as AgentInstallReceiptV1;
@@ -333,6 +346,7 @@ function verifyOwnedFiles(
     for (const file of receipt.files) {
       const target = path.join(agentsRoot, file.path);
       assertContained(agentsRoot, target);
+      assertNoSymlinkComponents(target);
       const stat = fs.lstatSync(target);
       if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`${file.path} is not a regular file`);
       if (sha256(fs.readFileSync(target)) !== file.sha256) {
@@ -354,8 +368,7 @@ function verifyOwnedFiles(
 
 function validateAgentsRoot(agentsRoot: string): Result<void, RuntimeError> {
   try {
-    const parent = path.dirname(agentsRoot);
-    if (fs.existsSync(parent) && fs.lstatSync(parent).isSymbolicLink()) throw new Error('agents parent is a symlink');
+    assertNoSymlinkComponents(agentsRoot);
     if (fs.existsSync(agentsRoot)) {
       const stat = fs.lstatSync(agentsRoot);
       if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('agents root is not a regular directory');
@@ -371,6 +384,7 @@ function validateAgentsRoot(agentsRoot: string): Result<void, RuntimeError> {
 }
 
 function assertRegularOrAbsent(targetPath: string): void {
+  assertNoSymlinkComponents(targetPath);
   const directory = path.dirname(targetPath);
   if (fs.existsSync(directory)) {
     const directoryStat = fs.lstatSync(directory);
@@ -385,6 +399,30 @@ function assertRegularOrAbsent(targetPath: string): void {
 function assertContained(root: string, target: string): void {
   const relative = path.relative(path.resolve(root), path.resolve(target));
   if (relative.startsWith('..') || path.isAbsolute(relative)) throw new Error('agent path escaped install root');
+}
+
+/** Reject any existing symlink component before mkdir/read/write follows it. */
+function assertNoSymlinkComponents(targetPath: string): void {
+  const absolute = path.resolve(targetPath);
+  let ancestor = absolute;
+  const suffix: string[] = [];
+  while (!fs.existsSync(ancestor)) {
+    const parent = path.dirname(ancestor);
+    if (parent === ancestor) break;
+    suffix.unshift(path.basename(ancestor));
+    ancestor = parent;
+  }
+  if (fs.existsSync(ancestor) && fs.lstatSync(ancestor).isSymbolicLink()) {
+    throw new Error('native agent path contains a symbolic-link component');
+  }
+  let cursor = ancestor;
+  for (const segment of suffix) {
+    cursor = path.join(cursor, segment);
+    if (!fs.existsSync(cursor)) continue;
+    if (fs.lstatSync(cursor).isSymbolicLink()) {
+      throw new Error('native agent path contains a symbolic-link component');
+    }
+  }
 }
 
 interface FileSnapshotV1 {

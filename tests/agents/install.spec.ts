@@ -130,6 +130,24 @@ describe('native agent installation', () => {
     }
   });
 
+  test('rejects symlinked install ancestry instead of following it outside the workspace', () => {
+    if (process.platform === 'win32') return;
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'oma-agent-symlink-workspace-'));
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'oma-agent-symlink-outside-'));
+    try {
+      fs.symlinkSync(outside, path.join(workspace, '.agents'), 'dir');
+      const result = installNativeAgents({
+        scope: 'project', workspaceRoot: workspace, capabilityProfile: supportedProfile(),
+      });
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.code).toBe('E_PATH_OUTSIDE_ROOT');
+      expect(fs.readdirSync(outside)).toEqual([]);
+    } finally {
+      fs.rmSync(workspace, { recursive: true, force: true });
+      fs.rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
   test('detects external edits and refuses to claim them on reinstall', () => {
     const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'oma-agent-drift-'));
     try {
