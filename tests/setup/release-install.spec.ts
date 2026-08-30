@@ -419,16 +419,21 @@ describe('standalone and offline install shell acceptance', () => {
     });
   }
 
+  function expectAdvisoryReleaseSuccess(result: ReturnType<typeof spawnSync>): void {
+    expect({ status: result.status, signal: result.signal }).toEqual({ status: 0, signal: null });
+    expect(result.stdout).toContain('completed_with_warning');
+    expect(result.stdout).not.toContain('installed and exactly verified');
+    expect(result.stderr).toContain('warn: primary install completed with development warnings');
+    expect(result.stderr).toContain('completed with warnings; receipt preserves the exact primary result');
+  }
+
   test('manual archive + SHA256SUMS succeeds with sealed PATH and zero curl/npm/build', () => {
     const root = path.join(suiteRoot, 'offline-success');
     const harness = installerHarness(root, asset, checksums);
     const result = run(harness, path.join(packageRoot, 'scripts', 'install.sh'), [
       '--asset', asset, '--checksums', checksums, '--no-auxiliary',
     ]);
-    expect({ status: result.status, signal: result.signal, stderr: result.stderr }).toEqual({
-      status: 0, signal: null, stderr: '',
-    });
-    expect(result.stdout).toContain('installed and exactly verified');
+    expectAdvisoryReleaseSuccess(result);
     expect(fs.existsSync(path.join(root, 'npm.log'))).toBe(false);
     expect(fs.existsSync(path.join(root, 'curl.log'))).toBe(false);
     expect(fs.readFileSync(path.join(root, 'agy.log'), 'utf8')).toContain('plugin install');
@@ -477,8 +482,7 @@ describe('standalone and offline install shell acceptance', () => {
     const result = run(harness, path.join(packageRoot, 'scripts', 'install.sh'), [
       '--asset', asset, '--asset-sha256', assetDigest, '--no-auxiliary',
     ]);
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain('installed and exactly verified');
+    expectAdvisoryReleaseSuccess(result);
     expect(fs.existsSync(path.join(root, 'curl.log'))).toBe(false);
     expect(fs.existsSync(path.join(root, 'npm.log'))).toBe(false);
     const receipt = readInstallReceipt(installReceiptPaths(harness.state)[0]);
@@ -501,8 +505,7 @@ describe('standalone and offline install shell acceptance', () => {
     const result = run(harness, standalone, [
       '--github', '--tag', `v${version}`, '--no-auxiliary',
     ], { ...harness.env, OMA_TEST_CURL_MODE: 'release' });
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain('installed and exactly verified');
+    expectAdvisoryReleaseSuccess(result);
     expect(fs.existsSync(path.join(root, 'npm.log'))).toBe(false);
     const curlLog = fs.readFileSync(path.join(root, 'curl.log'), 'utf8');
     expect(curlLog).toContain(`/releases/download/v${version}/iml1s-oh-my-agy-${version}.tgz`);
