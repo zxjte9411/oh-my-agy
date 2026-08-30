@@ -37,6 +37,12 @@ describe('native Markdown agent rendering', () => {
     }
   });
 
+  test('uses the modular prompt registry without changing the current orchestrator posture', () => {
+    const orchestrator = renderCanonicalAgent('orchestrator');
+    expect(orchestrator.markdown).toContain("You are OMA's orchestration-focused main agent.");
+    expect(orchestrator.markdown).toContain('Native subagent routing policy is owned by OMA orchestration');
+  });
+
   test('does not render legacy aliases as additional visible agents', () => {
     expect(() => renderCanonicalAgent('reviewer')).toThrow(/non-canonical/u);
     expect(() => renderCanonicalAgent('executor')).toThrow(/non-canonical/u);

@@ -1,4 +1,4 @@
-import { CANONICAL_AGENT_PROMPTS_V1 } from './prompts';
+import { canonicalAgentPromptV1 } from './prompts';
 import { canonicalAgentDefinition, isCanonicalAgentId } from './registry';
 import {
   CANONICAL_AGENT_IDS_V1,
@@ -16,6 +16,10 @@ const READ_WRITE_TOOLS = Object.freeze([
   'run_command',
 ] as const);
 
+export interface RenderCanonicalAgentOptionsV1 {
+  readonly nativeDelegationAvailable?: boolean;
+}
+
 export interface RenderedNativeAgentV1 {
   readonly id: CanonicalAgentIdV1;
   readonly markdown: string;
@@ -27,7 +31,10 @@ export interface RenderedNativeAgentV1 {
  * 將 canonical registry 投影成 Antigravity Markdown custom-agent frontmatter。
  * 只使用官方穩定 tool 名稱，避免未知 tool 造成 native subagent hang。
  */
-export function renderCanonicalAgent(id: unknown): RenderedNativeAgentV1 {
+export function renderCanonicalAgent(
+  id: unknown,
+  options: Readonly<RenderCanonicalAgentOptionsV1> = {},
+): RenderedNativeAgentV1 {
   if (!isCanonicalAgentId(id)) {
     throw new Error(`Cannot render non-canonical agent role: ${String(id)}`);
   }
@@ -46,7 +53,7 @@ export function renderCanonicalAgent(id: unknown): RenderedNativeAgentV1 {
     `commandExecutionPolicy: ${commandExecutionPolicy}`,
     '---',
     '',
-    CANONICAL_AGENT_PROMPTS_V1[id].trim(),
+    canonicalAgentPromptV1(id, options).trim(),
     '',
   ];
   return Object.freeze({
@@ -57,8 +64,10 @@ export function renderCanonicalAgent(id: unknown): RenderedNativeAgentV1 {
   });
 }
 
-export function renderAllCanonicalAgents(): readonly RenderedNativeAgentV1[] {
-  return Object.freeze(CANONICAL_AGENT_IDS_V1.map((id) => renderCanonicalAgent(id)));
+export function renderAllCanonicalAgents(
+  options: Readonly<RenderCanonicalAgentOptionsV1> = {},
+): readonly RenderedNativeAgentV1[] {
+  return Object.freeze(CANONICAL_AGENT_IDS_V1.map((id) => renderCanonicalAgent(id, options)));
 }
 
 function toolsForCapability(mode: CanonicalAgentCapabilityModeV1): readonly string[] {
