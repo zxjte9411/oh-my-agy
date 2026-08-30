@@ -8,6 +8,7 @@ import {
 import {
   assessNativeDelegationCapability,
   planNativeDelegation,
+  reconcileNativeDelegation,
 } from '../../src/agents/orchestration';
 
 function capabilityProfile(invokeSupported: boolean) {
@@ -66,20 +67,24 @@ function capabilityProfile(invokeSupported: boolean) {
   });
 }
 
+function representativePlan() {
+  return planNativeDelegation({
+    lanes: [
+      { id: 'scan', task: 'Locate the implementation seam.', intent: 'codebase-discovery' },
+      { id: 'docs', task: 'Check the current framework contract.', intent: 'external-research' },
+      { id: 'arch', task: 'Review the proposed architecture.', requestedRole: 'architect' },
+      {
+        id: 'impl', task: 'Implement the bounded change.', intent: 'implementation',
+        dependsOn: ['scan', 'docs', 'arch'],
+      },
+      { id: 'verify', task: 'Review the completed change.', requestedRole: 'verifier', dependsOn: ['impl'] },
+    ],
+  });
+}
+
 describe('native orchestrator delegation planning', () => {
   test('routes a representative multi-lane task into deterministic dependency waves', () => {
-    const result = planNativeDelegation({
-      lanes: [
-        { id: 'scan', task: 'Locate the implementation seam.', intent: 'codebase-discovery' },
-        { id: 'docs', task: 'Check the current framework contract.', intent: 'external-research' },
-        { id: 'arch', task: 'Review the proposed architecture.', requestedRole: 'architect' },
-        {
-          id: 'impl', task: 'Implement the bounded change.', intent: 'implementation',
-          dependsOn: ['scan', 'docs', 'arch'],
-        },
-        { id: 'verify', task: 'Review the completed change.', requestedRole: 'verifier', dependsOn: ['impl'] },
-      ],
-    });
+    const result = representativePlan();
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.value.lanes.map(({ id, agent, routeReason }) => ({ id, agent, routeReason }))).toEqual([
@@ -140,6 +145,64 @@ describe('native orchestrator delegation planning', () => {
     });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe('E_TASK_DEPENDENCY_BLOCKED');
+  });
+
+  test('reconciles completed waves before allowing implementation and verification', () => {
+    const planned = representativePlan();
+    expect(planned.ok).toBe(true);
+    if (!planned.ok) return;
+    const discovery = [
+      { laneId: 'arch', status: 'completed' as const, summary: 'Architecture approved.' },
+      { laneId: 'docs', status: 'completed' as const, summary: 'Docs confirmed.' },
+      { laneId: 'scan', status: 'completed' as const, summary: 'Implementation seam located.' },
+    ];
+    const afterDiscovery = reconcileNativeDelegation(planned.value, discovery);
+    expect(afterDiscovery.ok).toBe(true);
+    if (!afterDiscovery.ok) return;
+    expect(afterDiscovery.value).toMatchObject({
+      status: 'continue', completedWaves: 1, nextWaveIndex: 1, nextLaneIds: ['impl'], blockers: [],
+    });
+
+    const afterImplementation = reconcileNativeDelegation(planned.value, [
+      ...discovery,
+      { laneId: 'impl', status: 'completed', summary: 'Bounded implementation completed.', evidence: ['tests:unit'] },
+    ]);
+    expect(afterImplementation.ok).toBe(true);
+    if (!afterImplementation.ok) return;
+    expect(afterImplementation.value).toMatchObject({
+      status: 'continue', completedWaves: 2, nextWaveIndex: 2, nextLaneIds: ['verify'],
+    });
+
+    const ready = reconcileNativeDelegation(planned.value, [
+      ...discovery,
+      { laneId: 'impl', status: 'completed', summary: 'Bounded implementation completed.' },
+      { laneId: 'verify', status: 'completed', summary: 'Review evidence accepted.' },
+    ]);
+    expect(ready.ok).toBe(true);
+    if (!ready.ok) return;
+    expect(ready.value).toMatchObject({
+      status: 'ready-for-verification', completedWaves: 3, nextWaveIndex: null, blockers: [],
+    });
+    expect(ready.value.reconciliationDigest).toMatch(/^[a-f0-9]{64}$/u);
+  });
+
+  test('blocks on failed predecessors and rejects outcomes that skip dependency waves', () => {
+    const planned = representativePlan();
+    expect(planned.ok).toBe(true);
+    if (!planned.ok) return;
+    const blocked = reconcileNativeDelegation(planned.value, [
+      { laneId: 'arch', status: 'failed', summary: 'Architecture conflict.' },
+      { laneId: 'docs', status: 'completed', summary: 'Docs confirmed.' },
+      { laneId: 'scan', status: 'completed', summary: 'Implementation seam located.' },
+    ]);
+    expect(blocked.ok).toBe(true);
+    if (blocked.ok) expect(blocked.value).toMatchObject({ status: 'blocked', blockers: ['arch'] });
+
+    const skipped = reconcileNativeDelegation(planned.value, [
+      { laneId: 'impl', status: 'completed', summary: 'Should not have run.' },
+    ]);
+    expect(skipped.ok).toBe(false);
+    if (!skipped.ok) expect(skipped.error.code).toBe('E_TASK_DEPENDENCY_BLOCKED');
   });
 
   test('requires MCP inheritance and verified native invoke evidence before advertising delegation', () => {

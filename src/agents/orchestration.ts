@@ -12,6 +12,7 @@ import { AgentRouteReasonV1, routeAgentDelegation } from './routing';
 import { CanonicalAgentCapabilityModeV1, CanonicalAgentIdV1 } from './types';
 
 export const NATIVE_DELEGATION_PLAN_SCHEMA_V1 = 'oma.native-delegation-plan/v1' as const;
+export const NATIVE_DELEGATION_RECONCILIATION_SCHEMA_V1 = 'oma.native-delegation-reconciliation/v1' as const;
 export const NATIVE_DELEGATION_CAPABILITIES_V1 = Object.freeze([
   'custom_agent.subagent',
   'custom_agent.inherit_mcp',
@@ -54,6 +55,35 @@ export interface NativeDelegationPlanV1 {
   readonly lanes: readonly NativeDelegationLaneV1[];
   readonly waves: readonly NativeDelegationWaveV1[];
   readonly planDigest: string;
+}
+
+export type NativeDelegationOutcomeStatusV1 = 'completed' | 'failed' | 'blocked';
+
+export interface NativeDelegationOutcomeInputV1 {
+  readonly laneId: string;
+  readonly status: NativeDelegationOutcomeStatusV1;
+  readonly summary: string;
+  readonly evidence?: readonly string[];
+}
+
+export interface NativeDelegationOutcomeV1 {
+  readonly laneId: string;
+  readonly status: NativeDelegationOutcomeStatusV1;
+  readonly summary: string;
+  readonly evidence: readonly string[];
+  readonly resultDigest: string;
+}
+
+export interface NativeDelegationReconciliationV1 {
+  readonly schema: typeof NATIVE_DELEGATION_RECONCILIATION_SCHEMA_V1;
+  readonly planDigest: string;
+  readonly status: 'continue' | 'blocked' | 'ready-for-verification';
+  readonly completedWaves: number;
+  readonly nextWaveIndex: number | null;
+  readonly nextLaneIds: readonly string[];
+  readonly blockers: readonly string[];
+  readonly outcomes: readonly NativeDelegationOutcomeV1[];
+  readonly reconciliationDigest: string;
 }
 
 export interface NativeDelegationCapabilityRequirementV1 {
@@ -158,6 +188,113 @@ export function planNativeDelegation(
   }));
 }
 
+/**
+ * 將 child outcomes 綁回 immutable plan，且只允許已完整完成的 wave 推進。
+ * 不接受跨 wave 偷跑，也不把 failed/blocked predecessor 當成可繼續。
+ */
+export function reconcileNativeDelegation(
+  planValue: unknown,
+  outcomeValues: readonly NativeDelegationOutcomeInputV1[],
+): Result<NativeDelegationReconciliationV1, RuntimeError> {
+  const plan = validateNativeDelegationPlan(planValue);
+  if (!plan.ok) return plan;
+  if (!Array.isArray(outcomeValues) || outcomeValues.length === 0
+    || outcomeValues.length > plan.value.lanes.length) {
+    return err(runtimeError('E_VALIDATOR_REJECTED', 'native delegation reconciliation requires bounded outcomes'));
+  }
+
+  const laneIds = new Set(plan.value.lanes.map(({ id }) => id));
+  const outcomes: NativeDelegationOutcomeV1[] = [];
+  const seen = new Set<string>();
+  for (const raw of outcomeValues) {
+    const laneId = boundedLaneId(raw.laneId);
+    if (laneId === null || !laneIds.has(laneId) || seen.has(laneId)) {
+      return err(runtimeError('E_VALIDATOR_REJECTED', `native delegation outcome lane is invalid: ${String(raw.laneId)}`));
+    }
+    seen.add(laneId);
+    if (!['completed', 'failed', 'blocked'].includes(raw.status)) {
+      return err(runtimeError('E_VALIDATOR_REJECTED', `native delegation outcome ${laneId} has invalid status`));
+    }
+    const summary = boundedTask(raw.summary);
+    if (summary === null) {
+      return err(runtimeError('E_VALIDATOR_REJECTED', `native delegation outcome ${laneId} has invalid summary`));
+    }
+    const evidence = normalizeEvidence(raw.evidence ?? []);
+    if (evidence === null) {
+      return err(runtimeError('E_VALIDATOR_REJECTED', `native delegation outcome ${laneId} has invalid evidence`));
+    }
+    const material = { laneId, status: raw.status, summary, evidence } as const;
+    outcomes.push(Object.freeze({
+      ...material,
+      evidence: Object.freeze(evidence),
+      resultDigest: sha256(canonicalBytesV1(material)),
+    }));
+  }
+  outcomes.sort((left, right) => compareUtf8(left.laneId, right.laneId));
+  const outcomeByLane = new Map(outcomes.map((outcome) => [outcome.laneId, outcome]));
+
+  let completedWaves = 0;
+  let nextWaveIndex: number | null = null;
+  let nextLaneIds: readonly string[] = Object.freeze([]);
+  let blockers: readonly string[] = Object.freeze([]);
+  let blocked = false;
+  for (const wave of plan.value.waves) {
+    const waveOutcomes = wave.laneIds.map((laneId) => outcomeByLane.get(laneId));
+    const present = waveOutcomes.filter((outcome) => outcome !== undefined).length;
+    if (present === 0) {
+      nextWaveIndex = wave.index;
+      nextLaneIds = Object.freeze([...wave.laneIds]);
+      const laterIds = plan.value.waves
+        .filter(({ index }) => index > wave.index)
+        .flatMap(({ laneIds: laterLaneIds }) => [...laterLaneIds]);
+      if (laterIds.some((laneId) => outcomeByLane.has(laneId))) {
+        return err(runtimeError('E_TASK_DEPENDENCY_BLOCKED', 'native delegation outcomes skipped a dependency wave'));
+      }
+      break;
+    }
+    if (present !== wave.laneIds.length) {
+      return err(runtimeError('E_TASK_DEPENDENCY_BLOCKED', `native delegation wave ${wave.index} is only partially reconciled`));
+    }
+    const waveBlockers = waveOutcomes
+      .filter((outcome): outcome is NativeDelegationOutcomeV1 => outcome !== undefined && outcome.status !== 'completed')
+      .map(({ laneId }) => laneId)
+      .sort(compareUtf8);
+    completedWaves += 1;
+    if (waveBlockers.length > 0) {
+      blockers = Object.freeze(waveBlockers);
+      blocked = true;
+      const laterIds = plan.value.waves
+        .filter(({ index }) => index > wave.index)
+        .flatMap(({ laneIds: laterLaneIds }) => [...laterLaneIds]);
+      if (laterIds.some((laneId) => outcomeByLane.has(laneId))) {
+        return err(runtimeError('E_TASK_DEPENDENCY_BLOCKED', 'native delegation continued after a blocked predecessor wave'));
+      }
+      nextWaveIndex = null;
+      nextLaneIds = Object.freeze([]);
+      break;
+    }
+  }
+
+  const allWavesCompleted = completedWaves === plan.value.waves.length;
+  const status = blocked
+    ? 'blocked' as const
+    : allWavesCompleted ? 'ready-for-verification' as const : 'continue' as const;
+  const base = {
+    schema: NATIVE_DELEGATION_RECONCILIATION_SCHEMA_V1,
+    planDigest: plan.value.planDigest,
+    status,
+    completedWaves,
+    nextWaveIndex,
+    nextLaneIds,
+    blockers,
+    outcomes: Object.freeze(outcomes),
+  } as const;
+  return ok(Object.freeze({
+    ...base,
+    reconciliationDigest: sha256(canonicalBytesV1(base)),
+  }));
+}
+
 export function assessNativeDelegationCapability(profileValue: unknown): NativeDelegationCapabilityV1 {
   let profile: HostCapabilityProfileV1;
   try {
@@ -198,6 +335,35 @@ export function assessNativeDelegationCapability(profileValue: unknown): NativeD
       ? null
       : `native delegation capabilities are unproven: ${missing.join(', ')}`,
   });
+}
+
+function validateNativeDelegationPlan(
+  value: unknown,
+): Result<NativeDelegationPlanV1, RuntimeError> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return err(runtimeError('E_VALIDATOR_REJECTED', 'native delegation plan is not an object'));
+  }
+  const candidate = value as Partial<NativeDelegationPlanV1>;
+  if (candidate.schema !== NATIVE_DELEGATION_PLAN_SCHEMA_V1
+    || !Array.isArray(candidate.lanes) || !Array.isArray(candidate.waves)
+    || typeof candidate.planDigest !== 'string' || !/^[a-f0-9]{64}$/u.test(candidate.planDigest)) {
+    return err(runtimeError('E_VALIDATOR_REJECTED', 'native delegation plan shape is invalid'));
+  }
+  const { planDigest, ...base } = candidate as NativeDelegationPlanV1;
+  if (sha256(canonicalBytesV1(base)) !== planDigest) {
+    return err(runtimeError('E_PROJECTION_HASH_MISMATCH', 'native delegation plan digest does not match its contents'));
+  }
+  const laneIds = candidate.lanes.map(({ id }) => id);
+  if (laneIds.length === 0 || laneIds.length > 16 || new Set(laneIds).size !== laneIds.length
+    || laneIds.some((id) => boundedLaneId(id) === null)) {
+    return err(runtimeError('E_VALIDATOR_REJECTED', 'native delegation plan lane set is invalid'));
+  }
+  const waveLaneIds = candidate.waves.flatMap(({ laneIds: ids }) => [...ids]);
+  if (waveLaneIds.length !== laneIds.length || new Set(waveLaneIds).size !== waveLaneIds.length
+    || waveLaneIds.some((id) => !laneIds.includes(id))) {
+    return err(runtimeError('E_VALIDATOR_REJECTED', 'native delegation plan waves do not cover the lane set exactly'));
+  }
+  return ok(candidate as NativeDelegationPlanV1);
 }
 
 function buildWaves(
@@ -248,6 +414,17 @@ function normalizeDependencies(value: readonly string[]): string[] | null {
     dependencies.push(normalized);
   }
   return dependencies.sort(compareUtf8);
+}
+
+function normalizeEvidence(value: readonly string[]): string[] | null {
+  if (!Array.isArray(value) || value.length > 100) return null;
+  const evidence: string[] = [];
+  for (const entry of value) {
+    if (typeof entry !== 'string' || entry.trim() === '' || entry.includes('\0')
+      || Buffer.byteLength(entry, 'utf8') > 2_048 || evidence.includes(entry)) return null;
+    evidence.push(entry);
+  }
+  return evidence.sort(compareUtf8);
 }
 
 function compareUtf8(left: string, right: string): number {
