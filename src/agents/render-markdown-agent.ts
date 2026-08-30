@@ -35,7 +35,7 @@ export interface RenderedNativeAgentV1 {
 /**
  * 將 canonical registry 投影成 Antigravity Markdown custom-agent frontmatter。
  * 只使用官方穩定 tool 名稱；invoke_subagent 僅在 capability-proven orchestrator 上暴露。
- * Native orchestrator 使用目前文件化的 mcpServers frontmatter，不依賴 inheritMcp。
+ * Native orchestrator 使用 agent-private OMA MCP surface，不擴張既有 public MCP contract。
  */
 export function renderCanonicalAgent(
   id: unknown,
@@ -63,9 +63,10 @@ export function renderCanonicalAgent(
     `commandExecutionPolicy: ${commandExecutionPolicy}`,
     ...(nativeDelegationAvailable ? [
       'mcpServers:',
-      '  oh-my-agy:',
+      '  oh-my-agy-agents:',
       '    command: oma',
       '    args:',
+      '      - agents',
       '      - mcp-server',
     ] : []),
     '---',
