@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { CANONICAL_AGENT_ROLE_ALIASES_V1, resolveCanonicalAgentId } from '../agents/aliases';
+import { AGENT_DELEGATION_MCP_SURFACE_V1 } from '../agents/delegation-mcp';
 import {
   AgentInstallScopeV1,
   doctorNativeAgentInstallation,
@@ -9,6 +10,7 @@ import {
 } from '../agents/install';
 import { CANONICAL_AGENT_REGISTRY_V1 } from '../agents/registry';
 import { CANONICAL_AGENT_IDS_V1 } from '../agents/types';
+import { startMcpNdjsonServer } from '../mcp/server';
 import { HostCapabilityProfileV1 } from '../native/capability-profile';
 import { runBoundedProbe } from '../native/probes/runner';
 import { formatCliError } from '../runtime/error-catalog';
@@ -21,12 +23,14 @@ export type AgentCliCommandV1 =
   | { readonly kind: 'list'; readonly asJson: boolean }
   | { readonly kind: 'inspect'; readonly role: string; readonly asJson: boolean }
   | { readonly kind: 'install'; readonly scope: AgentInstallScopeV1; readonly asJson: boolean }
-  | { readonly kind: 'doctor'; readonly scope: AgentInstallScopeV1; readonly asJson: boolean };
+  | { readonly kind: 'doctor'; readonly scope: AgentInstallScopeV1; readonly asJson: boolean }
+  | { readonly kind: 'mcp-server' };
 
 export interface AgentCommandDependenciesV1 {
   readonly workspaceRoot: string;
   readonly homeDir?: string;
   readonly loadCapabilityProfile: () => Promise<Result<HostCapabilityProfileV1, RuntimeError>>;
+  readonly startDelegationMcpServer?: () => Promise<number>;
   readonly stdout: (value: string) => void;
   readonly stderr: (value: string) => void;
 }
@@ -59,13 +63,28 @@ export function parseAgentCommand(argv: readonly string[]): Result<AgentCliComma
     if (!parsed.ok) return parsed;
     return ok({ kind: 'doctor', scope: parsed.value.scope, asJson: parsed.value.asJson });
   }
-  return usage('agents command must be one of: list, inspect, install, doctor');
+  if (subcommand === 'mcp-server') {
+    if (argv.length !== 1) return usage('agents mcp-server accepts no arguments');
+    return ok({ kind: 'mcp-server' });
+  }
+  return usage('agents command must be one of: list, inspect, install, doctor, mcp-server');
 }
 
 export async function runAgentCommand(
   command: Readonly<AgentCliCommandV1>,
   dependencies: Readonly<AgentCommandDependenciesV1>,
 ): Promise<number> {
+  if (command.kind === 'mcp-server') {
+    if (dependencies.startDelegationMcpServer === undefined) {
+      dependencies.stderr(formatCliError(
+        'E_VALIDATOR_REJECTED',
+        'agent delegation MCP server is unavailable in this runtime',
+      ));
+      return 1;
+    }
+    return dependencies.startDelegationMcpServer();
+  }
+
   if (command.kind === 'list') {
     const agents = CANONICAL_AGENT_IDS_V1.map((id) => CANONICAL_AGENT_REGISTRY_V1[id]);
     if (command.asJson) {
@@ -180,6 +199,18 @@ export async function runDefaultAgentCommand(
     homeDir: os.homedir(),
     stdout: io.stdout,
     stderr: io.stderr,
+    startDelegationMcpServer: async () => {
+      const stateRoot = process.env.OMA_STATE_ROOT ?? path.join(workspaceRoot, '.agy', 'state');
+      startMcpNdjsonServer(
+        { repositoryRoot: workspaceRoot, stateRoot },
+        process.stdin,
+        process.stdout,
+        AGENT_DELEGATION_MCP_SURFACE_V1,
+      );
+      if (process.stdin.readableEnded) return 0;
+      await new Promise<void>((resolve) => { process.stdin.once('end', resolve); });
+      return 0;
+    },
     loadCapabilityProfile: async () => {
       try {
         const inspected = await inspectNativeCapabilities({

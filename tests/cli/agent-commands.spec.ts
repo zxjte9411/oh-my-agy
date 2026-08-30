@@ -3,7 +3,7 @@ import { err } from '../../src/runtime/types';
 import { runtimeError } from '../../src/runtime/errors';
 
 describe('oma agents command contract', () => {
-  test('parses list, inspect, install and project-default doctor', () => {
+  test('parses list, inspect, install, doctor and private mcp-server', () => {
     expect(parseAgentCommand(['list'])).toEqual({ ok: true, value: { kind: 'list', asJson: false } });
     expect(parseAgentCommand(['inspect', 'critic', '--json'])).toEqual({
       ok: true,
@@ -17,6 +17,10 @@ describe('oma agents command contract', () => {
       ok: true,
       value: { kind: 'doctor', scope: 'project', asJson: false },
     });
+    expect(parseAgentCommand(['mcp-server'])).toEqual({
+      ok: true,
+      value: { kind: 'mcp-server' },
+    });
   });
 
   test('rejects unsafe or ambiguous argv', () => {
@@ -24,6 +28,33 @@ describe('oma agents command contract', () => {
     expect(parseAgentCommand(['install', '--scope', 'global']).ok).toBe(false);
     expect(parseAgentCommand(['inspect', 'oracle', 'extra']).ok).toBe(false);
     expect(parseAgentCommand(['list', '--json', '--json']).ok).toBe(false);
+    expect(parseAgentCommand(['mcp-server', '--json']).ok).toBe(false);
+  });
+
+  test('runs the private delegation MCP server without probing host capabilities', async () => {
+    let started = 0;
+    let capabilityLoads = 0;
+    const parsed = parseAgentCommand(['mcp-server']);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+
+    const code = await runAgentCommand(parsed.value, {
+      workspaceRoot: '/workspace',
+      loadCapabilityProfile: async () => {
+        capabilityLoads += 1;
+        return err(runtimeError('E_CAPABILITY_UNPROVEN', 'must not be called'));
+      },
+      startDelegationMcpServer: async () => {
+        started += 1;
+        return 0;
+      },
+      stdout: () => undefined,
+      stderr: () => undefined,
+    });
+
+    expect(code).toBe(0);
+    expect(started).toBe(1);
+    expect(capabilityLoads).toBe(0);
   });
 
   test('lists only canonical agents and resolves inspect aliases without creating visible duplicates', async () => {
