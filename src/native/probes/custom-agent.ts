@@ -13,7 +13,6 @@ import { runBoundedProbe } from './runner';
 import {
   BoundedProbeRunnerV1,
   LiveProbeContextV1,
-  PASSIVE_PROBE_LIMITS_V1,
   ProbeResultV1,
 } from './types';
 
@@ -51,6 +50,8 @@ interface StreamEvidenceV1 {
 
 /**
  * 使用 workspace-local Markdown agents 做真實 Antigravity live canary。
+ * `native probe --live` 已是明確的副作用 opt-in，因此不再以 help text 當執行 gate；
+ * 舊版或不支援的 host 會由 bounded process 結果留下 indeterminate evidence，仍然 fail closed。
  * 不寫入 ~/.gemini，不放寬 capability gate；任何不完整 stream 都只留下 indeterminate evidence。
  */
 export async function runCustomAgentLiveCanary(
@@ -69,19 +70,6 @@ export async function runCustomAgentLiveCanary(
   const observedAt = () => (request.now ?? (() => new Date().toISOString()))();
   const runner = request.runner ?? runBoundedProbe;
   try {
-    const helpOutcome = await runner({
-      command: request.executable,
-      argv: ['--help'],
-      cwd: workspace,
-      environment: request.environment,
-      timeoutMs: PASSIVE_PROBE_LIMITS_V1.timeoutMs,
-      maximumOutputBytes: PASSIVE_PROBE_LIMITS_V1.maximumOutputBytes,
-      maximumProcesses: PASSIVE_PROBE_LIMITS_V1.maximumProcesses,
-    });
-    if (!advertisesCustomAgentSurface(helpOutcome)) {
-      return { observations: [], cacheable: true, detailCode: 'LIVE_CUSTOM_AGENT_NOT_ADVERTISED' };
-    }
-
     writeCanaryAgent(workspace, LIVE_CUSTOM_AGENT_PARENT_V1, parentAgentMarkdown());
     writeCanaryAgent(workspace, LIVE_CUSTOM_AGENT_CHILD_V1, childAgentMarkdown());
     const prompt = [
@@ -140,22 +128,6 @@ export async function runCustomAgentLiveCanary(
   } finally {
     fs.rmSync(workspace, { recursive: true, force: true });
   }
-}
-
-function advertisesCustomAgentSurface(outcome: Readonly<{
-  status: number | null;
-  stdout: string;
-  stderr: string;
-  timedOut: boolean;
-  outputOverflow: boolean;
-  processCountOverflow: boolean;
-  error?: string;
-}>): boolean {
-  if (outcome.status !== 0 || outcome.timedOut || outcome.outputOverflow
-    || outcome.processCountOverflow || outcome.error !== undefined) return false;
-  const help = `${outcome.stdout}\n${outcome.stderr}`;
-  return /(?:^|\s)--agent(?:[\s=,]|$)/mu.test(help)
-    && /(?:^|[\s,(|])(?:--)?stream-json(?=$|[\s,):|])/imu.test(help);
 }
 
 function observation(
