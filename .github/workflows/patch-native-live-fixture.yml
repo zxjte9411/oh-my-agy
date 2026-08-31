@@ -1,0 +1,62 @@
+name: patch-native-live-fixture
+
+on:
+  push:
+    branches:
+      - fix/native-agent-live-canary
+    paths:
+      - .github/workflows/patch-native-live-fixture.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/native-agent-live-canary
+          fetch-depth: 0
+
+      - name: Patch fixture contract
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const path = 'tests/cli/extended-services.spec.ts';
+          let source = fs.readFileSync(path, 'utf8');
+
+          const replacements = [
+            [
+              `/bin/sleep 0.05\n: > \${JSON.stringify(completionMarker)}\nif [ \"$format\" = \"json\" ]; then`,
+              `/bin/sleep 0.05\nif [ \"$format\" != \"stream-json\" ]; then\n  : > \${JSON.stringify(completionMarker)}\nfi\nif [ \"$format\" = \"json\" ]; then`,
+            ],
+            [
+              `expect(liveCalls).toHaveLength(3);`,
+              `expect(liveCalls).toHaveLength(4);`,
+            ],
+            [
+              `      expect(liveCalls[2]).toEqual(expect.arrayContaining(['--mode', 'plan', '--sandbox']));\n      for (const liveArgv of liveCalls) {`,
+              `      expect(liveCalls[2]).toEqual(expect.arrayContaining(['--mode', 'plan', '--sandbox']));\n      expect(liveCalls[3]).toEqual(expect.arrayContaining([\n        '--agent', 'oma-live-probe-main',\n        '--output-format', 'stream-json',\n        '--sandbox',\n      ]));\n      for (const liveArgv of liveCalls) {`,
+            ],
+          ];
+
+          for (const [before, after] of replacements) {
+            const count = source.split(before).length - 1;
+            if (count !== 1) {
+              throw new Error(`expected one fixture match, got ${count}: ${before.slice(0, 80)}`);
+            }
+            source = source.replace(before, after);
+          }
+
+          fs.writeFileSync(path, source);
+          NODE
+
+      - name: Commit fixture update
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add tests/cli/extended-services.spec.ts
+          git diff --cached --check
+          git commit -m "test(native): align live probe fixture with agent canary"
+          git push origin HEAD:fix/native-agent-live-canary
