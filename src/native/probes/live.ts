@@ -5,6 +5,7 @@ import { assertCanonicalUtcTimestamp } from '../../contracts/state-schemas';
 import { redactDiagnostic } from '../../runtime/redaction';
 import { CapabilityObservationV1 } from '../capability-profile';
 import { HOST_CAPABILITY_POLICY_REGISTRY_V1 } from '../capability-profile';
+import { runCustomAgentLiveCanary } from './custom-agent';
 import { BoundedProbeRunnerV1, LiveProbeContextV1, ProbeResultV1 } from './types';
 import { runBoundedProbe } from './runner';
 import { probeStructuredInitOutput } from './structured-init';
@@ -95,14 +96,34 @@ export async function runExplicitLiveProbe(request: Readonly<LiveProbeRequestV1>
     const structured = exact && request.outputContract === 'agy_json'
       ? probeStructuredInitOutput(outcome.stdout, completedContext, new Set([request.capability]))
       : { observations: [], cacheable: exact, detailCode: 'STRUCTURED_INIT_NOT_APPLICABLE' };
+    const agentCanary = exact && isReadOnlySandboxCanary(request)
+      ? await runCustomAgentLiveCanary({
+        executable: request.executable,
+        environment,
+        context: completedContext,
+      })
+      : { observations: [], cacheable: true, detailCode: 'CUSTOM_AGENT_LIVE_NOT_APPLICABLE' };
     return {
-      observations: [observation, ...structured.observations],
-      cacheable: exact && structured.cacheable,
+      observations: [observation, ...structured.observations, ...agentCanary.observations],
+      cacheable: exact && structured.cacheable && agentCanary.cacheable,
       detailCode,
     };
   } finally {
     fs.rmSync(scratch, { recursive: true, force: true });
   }
+}
+
+/**
+ * Read-only headless 是 live probe 最後一個 required sandbox canary；成功後才附帶
+ * workspace-local custom-agent canary。Agent canary 失敗不改寫 headless 的 detailCode，
+ * 只留下 indeterminate agent evidence，讓 installer/delegation gate 自己 fail closed。
+ */
+function isReadOnlySandboxCanary(request: Readonly<LiveProbeRequestV1>): boolean {
+  if (request.capability !== 'headless.print' || request.outputContract === 'agy_json') return false;
+  const modeIndex = request.argv.indexOf('--mode');
+  return request.argv.includes('--sandbox')
+    && modeIndex >= 0
+    && request.argv[modeIndex + 1] === 'plan';
 }
 
 /**
