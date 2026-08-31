@@ -614,6 +614,186 @@ describe('native agent installation', () => {
     }
   });
 
+  test('foreign oh-my-agy-agents collision (even exact canonical) without prior receipt fails closed', () => {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'oma-agent-mcp-exact-collision-'));
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'oma-agent-mcp-exact-collision-home-'));
+    try {
+      const mcpConfigDir = path.join(home, '.gemini', 'config');
+      const mcpConfigPath = path.join(mcpConfigDir, 'mcp_config.json');
+      fs.mkdirSync(mcpConfigDir, { recursive: true });
+      // Pre-seed an EXACT canonical entry without any OMA receipt
+      fs.writeFileSync(mcpConfigPath, JSON.stringify({
+        mcpServers: {
+          'oh-my-agy-agents': { command: 'oma', args: ['agents', 'mcp-server'] },
+        },
+      }), 'utf8');
+
+      const result = installNativeAgents({
+        scope: 'user', workspaceRoot: workspace, homeDir: home, capabilityProfile: supportedProfile(),
+      });
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe('E_ALREADY_EXISTS');
+        expect(result.error.message).toContain('Refusing to overwrite or adopt');
+      }
+      // Verify foreign config is preserved
+      const config = JSON.parse(fs.readFileSync(mcpConfigPath, 'utf8'));
+      expect(config.mcpServers['oh-my-agy-agents']).toEqual({ command: 'oma', args: ['agents', 'mcp-server'] });
+    } finally {
+      fs.rmSync(workspace, { recursive: true, force: true });
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test('extra fields in MCP entry are treated as foreign/drifted and preserved on uninstall', async () => {
+    const { uninstallNativeAgents } = await import('../../src/agents/install');
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'oma-agent-extra-fields-'));
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'oma-agent-extra-fields-home-'));
+    try {
+      const installed = installNativeAgents({
+        scope: 'user', workspaceRoot: workspace, homeDir: home, capabilityProfile: supportedProfile(),
+      });
+      expect(installed.ok).toBe(true);
+      if (!installed.ok) return;
+
+      const mcpConfigPath = installed.value.mcpConfigPath!;
+      // Mutate entry by adding extra fields
+      fs.writeFileSync(mcpConfigPath, JSON.stringify({
+        mcpServers: {
+          'oh-my-agy-agents': {
+            command: 'oma',
+            args: ['agents', 'mcp-server'],
+            env: { USER_CUSTOM: '1' },
+          },
+        },
+      }), 'utf8');
+
+      // Doctor detects drift
+      const doctor = doctorNativeAgentInstallation({
+        scope: 'user', workspaceRoot: workspace, homeDir: home, capabilityProfile: supportedProfile(),
+      });
+      expect(doctor.status).toBe('drifted');
+
+      // Uninstall preserves this drifted entry
+      const uninstalled = uninstallNativeAgents({
+        scope: 'user', workspaceRoot: workspace, homeDir: home,
+      });
+      expect(uninstalled.ok).toBe(true);
+      if (!uninstalled.ok) return;
+      expect(uninstalled.value.status).toBe('completed_with_collisions');
+      expect(uninstalled.value.collisions.length).toBeGreaterThan(0);
+
+      const config = JSON.parse(fs.readFileSync(mcpConfigPath, 'utf8'));
+      expect(config.mcpServers['oh-my-agy-agents']).toEqual({
+        command: 'oma',
+        args: ['agents', 'mcp-server'],
+        env: { USER_CUSTOM: '1' },
+      });
+    } finally {
+      fs.rmSync(workspace, { recursive: true, force: true });
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test('install with delegation unavailable does not claim MCP ownership and uninstall never deletes foreign entry', async () => {
+    const { uninstallNativeAgents } = await import('../../src/agents/install');
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'oma-agent-no-del-mcp-'));
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'oma-agent-no-del-mcp-home-'));
+    try {
+      // Pre-seed an entry in global config
+      const mcpConfigDir = path.join(home, '.gemini', 'config');
+      const mcpConfigPath = path.join(mcpConfigDir, 'mcp_config.json');
+      fs.mkdirSync(mcpConfigDir, { recursive: true });
+      const initialEntry = { command: 'foreign-oma', args: ['custom'] };
+      fs.writeFileSync(mcpConfigPath, JSON.stringify({
+        mcpServers: {
+          'foreign-server': initialEntry,
+        },
+      }), 'utf8');
+
+      // Install with delegation unavailable
+      const installed = installNativeAgents({
+        scope: 'user', workspaceRoot: workspace, homeDir: home, capabilityProfile: supportedProfile(false),
+      });
+      expect(installed.ok).toBe(true);
+      if (!installed.ok) return;
+      expect(installed.value.receipt.mcpServer).toBeNull();
+
+      // Now pre-seed a canonical entry as if user or other tool created it
+      fs.writeFileSync(mcpConfigPath, JSON.stringify({
+        mcpServers: {
+          'foreign-server': initialEntry,
+          'oh-my-agy-agents': { command: 'oma', args: ['agents', 'mcp-server'] },
+        },
+      }), 'utf8');
+
+      // Uninstall should NOT touch mcp_config.json because receipt has mcpServer: null
+      const uninstalled = uninstallNativeAgents({
+        scope: 'user', workspaceRoot: workspace, homeDir: home,
+      });
+      expect(uninstalled.ok).toBe(true);
+
+      const config = JSON.parse(fs.readFileSync(mcpConfigPath, 'utf8'));
+      expect(config.mcpServers['oh-my-agy-agents']).toBeDefined();
+    } finally {
+      fs.rmSync(workspace, { recursive: true, force: true });
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test('symlinked MCP config path fails before snapshot/mutation, leaving target unchanged', () => {
+    if (process.platform === 'win32') return;
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'oma-agent-mcp-sym-'));
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'oma-agent-mcp-sym-home-'));
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'oma-agent-mcp-sym-outside-'));
+    try {
+      const configDir = path.join(home, '.gemini', 'config');
+      fs.mkdirSync(configDir, { recursive: true });
+      const outsideFile = path.join(outside, 'mcp_config.json');
+      const outsideContent = JSON.stringify({ mcpServers: { 'outside-server': { command: 'ext' } } });
+      fs.writeFileSync(outsideFile, outsideContent, 'utf8');
+      fs.symlinkSync(outsideFile, path.join(configDir, 'mcp_config.json'));
+
+      const result = installNativeAgents({
+        scope: 'user', workspaceRoot: workspace, homeDir: home, capabilityProfile: supportedProfile(),
+      });
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe('E_PATH_OUTSIDE_ROOT');
+      }
+      // Outside file must be completely untouched
+      expect(fs.readFileSync(outsideFile, 'utf8')).toBe(outsideContent);
+    } finally {
+      fs.rmSync(workspace, { recursive: true, force: true });
+      fs.rmSync(home, { recursive: true, force: true });
+      fs.rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  test('malformed mcpServers container fails closed and preserves original bytes', () => {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'oma-agent-mcp-malformed-'));
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'oma-agent-mcp-malformed-home-'));
+    try {
+      const mcpConfigDir = path.join(home, '.gemini', 'config');
+      const mcpConfigPath = path.join(mcpConfigDir, 'mcp_config.json');
+      fs.mkdirSync(mcpConfigDir, { recursive: true });
+      const rawContent = JSON.stringify({ mcpServers: 'invalid-string-container' });
+      fs.writeFileSync(mcpConfigPath, rawContent, 'utf8');
+
+      const result = installNativeAgents({
+        scope: 'user', workspaceRoot: workspace, homeDir: home, capabilityProfile: supportedProfile(),
+      });
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe('E_CORRUPT_STATE');
+      }
+      expect(fs.readFileSync(mcpConfigPath, 'utf8')).toBe(rawContent);
+    } finally {
+      fs.rmSync(workspace, { recursive: true, force: true });
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   test('uninstall preserves drifted/modified MCP entry as a collision', async () => {
     const { uninstallNativeAgents } = await import('../../src/agents/install');
     const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'oma-agent-uninstall-drift-'));

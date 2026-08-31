@@ -33,14 +33,13 @@ export function canonicalMcpEntryDigest(): string {
   return sha256(canonicalJson(CANONICAL_OMA_MCP_SERVER_ENTRY));
 }
 
-function isCanonicalMcpEntry(entry: unknown): boolean {
+export function isCanonicalMcpEntry(entry: unknown): boolean {
   if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) return false;
-  const candidate = entry as { command?: unknown; args?: unknown };
-  return candidate.command === 'oma'
-    && Array.isArray(candidate.args)
-    && candidate.args.length === 2
-    && candidate.args[0] === 'agents'
-    && candidate.args[1] === 'mcp-server';
+  try {
+    return sha256(canonicalJson(entry)) === canonicalMcpEntryDigest();
+  } catch {
+    return false;
+  }
 }
 
 const REQUIRED_AGENT_CAPABILITIES = Object.freeze([
@@ -217,6 +216,28 @@ export function installNativeAgents(
         `Refusing to overwrite an unowned native agent: ${collision.relativePath}`,
       ));
     }
+    if (mcpConfigPath && nativeDelegationAvailable && fs.existsSync(mcpConfigPath)) {
+      const safeMcp = validateMcpConfigPath(mcpConfigPath);
+      if (!safeMcp.ok) return safeMcp;
+      try {
+        const config = JSON.parse(fs.readFileSync(mcpConfigPath, 'utf8'));
+        if (typeof config === 'object' && config !== null && !Array.isArray(config)
+          && config.mcpServers && typeof config.mcpServers === 'object' && !Array.isArray(config.mcpServers)
+          && config.mcpServers[CANONICAL_OMA_MCP_SERVER_NAME] !== undefined) {
+          return err(runtimeError(
+            'E_ALREADY_EXISTS',
+            `Refusing to overwrite or adopt an unowned MCP server entry: ${CANONICAL_OMA_MCP_SERVER_NAME}`,
+          ));
+        }
+      } catch (cause) {
+        if (cause instanceof SyntaxError) {
+          return err(runtimeError('E_CORRUPT_STATE', 'MCP config file is invalid JSON', {
+            cause: cause.message,
+          }));
+        }
+        throw cause;
+      }
+    }
   } else {
     const ownership = verifyOwnedFiles(agentsRoot, previousReceipt.value);
     if (!ownership.ok) return ownership;
@@ -228,8 +249,9 @@ export function installNativeAgents(
         mcpHealthy = false;
       }
     }
+    const expectedMcpConfigPath = nativeDelegationAvailable ? mcpConfigPath : null;
     const identical = previousReceipt.value.files.every((file) => desiredById.get(file.id) === file.sha256)
-      && (previousReceipt.value.mcpConfigPath ?? null) === mcpConfigPath
+      && (previousReceipt.value.mcpConfigPath ?? null) === expectedMcpConfigPath
       && mcpHealthy;
     if (identical) {
       return ok({
@@ -242,6 +264,11 @@ export function installNativeAgents(
         delegation,
       });
     }
+  }
+
+  if (mcpConfigPath && nativeDelegationAvailable) {
+    const safeMcp = validateMcpConfigPath(mcpConfigPath);
+    if (!safeMcp.ok) return safeMcp;
   }
 
   const snapshotTargetsList = [
@@ -269,7 +296,8 @@ export function installNativeAgents(
       throw new Error(`${mcpInstallResult.error.code}: ${mcpInstallResult.error.message}`);
     }
     const files = desired.map(({ id, relativePath, digest }) => ({ id, path: relativePath, sha256: digest }));
-    const receipt = buildReceipt(options.scope, transactionId, installedAt, files, mcpConfigPath);
+    const effectiveMcpConfigPath = nativeDelegationAvailable ? mcpConfigPath : null;
+    const receipt = buildReceipt(options.scope, transactionId, installedAt, files, effectiveMcpConfigPath, nativeDelegationAvailable);
     assertNoSymlinkComponents(receiptPath);
     atomicWriteJson(receiptPath, receipt, { mode: 0o600, transactionId });
     const verified = readReceipt(receiptPath, options.scope);
@@ -280,7 +308,7 @@ export function installNativeAgents(
       scope: options.scope,
       agentsRoot,
       receiptPath,
-      mcpConfigPath,
+      mcpConfigPath: effectiveMcpConfigPath,
       idempotent: false,
       receipt,
       delegation,
@@ -505,8 +533,9 @@ function buildReceipt(
   installedAt: string,
   files: readonly AgentInstallReceiptFileV1[],
   mcpConfigPath: string | null,
+  nativeDelegationAvailable = true,
 ): AgentInstallReceiptV1 {
-  const mcpServer: AgentInstallReceiptMcpV1 | null = mcpConfigPath !== null
+  const mcpServer: AgentInstallReceiptMcpV1 | null = nativeDelegationAvailable && mcpConfigPath !== null
     ? {
         serverName: CANONICAL_OMA_MCP_SERVER_NAME,
         configPath: mcpConfigPath,
@@ -627,6 +656,23 @@ function validateAgentsRoot(agentsRoot: string): Result<void, RuntimeError> {
   }
 }
 
+export function validateMcpConfigPath(mcpConfigPath: string): Result<void, RuntimeError> {
+  try {
+    assertNoSymlinkComponents(mcpConfigPath);
+    if (fs.existsSync(mcpConfigPath)) {
+      const stat = fs.lstatSync(mcpConfigPath);
+      if (!stat.isFile() || stat.isSymbolicLink()) {
+        return err(runtimeError('E_PATH_OUTSIDE_ROOT', 'MCP config is not a regular file'));
+      }
+    }
+    return ok(undefined);
+  } catch (cause) {
+    return err(runtimeError('E_PATH_OUTSIDE_ROOT', 'MCP config path contains a symbolic-link component', {
+      cause: cause instanceof Error ? cause.message : String(cause),
+    }));
+  }
+}
+
 function assertRegularOrAbsent(targetPath: string): void {
   assertNoSymlinkComponents(targetPath);
   const directory = path.dirname(targetPath);
@@ -721,23 +767,15 @@ export function installMcpRegistration(
   transactionId?: string,
 ): Result<void, RuntimeError> {
   if (!nativeDelegationAvailable || !mcpConfigPath) return ok(undefined);
-  try {
-    assertNoSymlinkComponents(mcpConfigPath);
-  } catch (cause) {
-    return err(runtimeError('E_PATH_OUTSIDE_ROOT', 'MCP config path contains a symbolic-link component', {
-      cause: cause instanceof Error ? cause.message : String(cause),
-    }));
-  }
-  let config: Record<string, any> = { mcpServers: {} };
+  const safePath = validateMcpConfigPath(mcpConfigPath);
+  if (!safePath.ok) return safePath;
+
+  let config: Record<string, any> = {};
   if (fs.existsSync(mcpConfigPath)) {
-    const stat = fs.lstatSync(mcpConfigPath);
-    if (!stat.isFile() || stat.isSymbolicLink()) {
-      return err(runtimeError('E_PATH_OUTSIDE_ROOT', 'MCP config is not a regular file'));
-    }
     try {
       config = JSON.parse(fs.readFileSync(mcpConfigPath, 'utf8'));
       if (typeof config !== 'object' || config === null || Array.isArray(config)) {
-        throw new Error('MCP config root must be an object');
+        return err(runtimeError('E_CORRUPT_STATE', 'MCP config root must be an object'));
       }
     } catch (cause) {
       return err(runtimeError('E_CORRUPT_STATE', 'MCP config file is invalid JSON', {
@@ -745,7 +783,11 @@ export function installMcpRegistration(
       }));
     }
   }
-  if (!config.mcpServers || typeof config.mcpServers !== 'object' || Array.isArray(config.mcpServers)) {
+  if (config.mcpServers !== undefined) {
+    if (typeof config.mcpServers !== 'object' || config.mcpServers === null || Array.isArray(config.mcpServers)) {
+      return err(runtimeError('E_CORRUPT_STATE', 'MCP config mcpServers container must be an object'));
+    }
+  } else {
     config.mcpServers = {};
   }
   const existing = config.mcpServers[CANONICAL_OMA_MCP_SERVER_NAME];
@@ -767,19 +809,17 @@ export function uninstallMcpRegistration(
   transactionId?: string,
 ): Result<'removed' | 'already_absent' | 'foreign_preserved', RuntimeError> {
   if (!mcpConfigPath || !fs.existsSync(mcpConfigPath)) return ok('already_absent');
+  const safePath = validateMcpConfigPath(mcpConfigPath);
+  if (!safePath.ok) return safePath;
+
   try {
-    assertNoSymlinkComponents(mcpConfigPath);
-    const stat = fs.lstatSync(mcpConfigPath);
-    if (!stat.isFile() || stat.isSymbolicLink()) {
-      return err(runtimeError('E_PATH_OUTSIDE_ROOT', 'MCP config is not a regular file'));
-    }
     const config = JSON.parse(fs.readFileSync(mcpConfigPath, 'utf8'));
     if (!config.mcpServers || !config.mcpServers[CANONICAL_OMA_MCP_SERVER_NAME]) {
       return ok('already_absent');
     }
     const current = config.mcpServers[CANONICAL_OMA_MCP_SERVER_NAME];
     const currentDigest = sha256(canonicalJson(current));
-    if (currentDigest !== expectedDigest && !isCanonicalMcpEntry(current)) {
+    if (currentDigest !== expectedDigest) {
       return ok('foreign_preserved');
     }
     delete config.mcpServers[CANONICAL_OMA_MCP_SERVER_NAME];
@@ -800,15 +840,10 @@ export function doctorMcpRegistration(
   nativeDelegationAvailable: boolean,
 ): string | null {
   if (!nativeDelegationAvailable || !mcpConfigPath) return null;
-  try {
-    assertNoSymlinkComponents(mcpConfigPath);
-  } catch (cause) {
-    return `MCP config path is unsafe: ${cause instanceof Error ? cause.message : String(cause)}`;
-  }
+  const safePath = validateMcpConfigPath(mcpConfigPath);
+  if (!safePath.ok) return `MCP config path is unsafe: ${safePath.error.message}`;
   if (!fs.existsSync(mcpConfigPath)) return 'MCP config file is missing';
   try {
-    const stat = fs.lstatSync(mcpConfigPath);
-    if (!stat.isFile() || stat.isSymbolicLink()) return 'MCP config file is not a regular file';
     const config = JSON.parse(fs.readFileSync(mcpConfigPath, 'utf8'));
     const server = config.mcpServers?.[CANONICAL_OMA_MCP_SERVER_NAME];
     if (!server) return 'MCP config entry for oh-my-agy-agents is missing';
