@@ -18,6 +18,14 @@ const PLUGIN_PATHS: Readonly<Record<string, readonly string[]>> = Object.freeze(
   'mcp.local_config': ['mcp_config', 'mcp_config.json', '.mcp.json'],
 });
 
+const DYNAMIC_AGENT_PROJECTIONS = new Set([
+  'custom_agent.markdown',
+  'custom_agent.main_agent',
+  'custom_agent.subagent',
+  'custom_agent.hidden',
+  'subagent.define',
+]);
+
 const PUBLIC_HOOKS_V1: Readonly<Record<string, string>> = Object.freeze({
   'hook.pre_tool_use': 'PreToolUse',
   'hook.post_tool_use': 'PostToolUse',
@@ -35,16 +43,21 @@ export function parsePluginReadback(
   try { parsed = JSON.parse(source); } catch (_) { return failed('PLUGIN_READBACK_MALFORMED', source, context); }
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return failed('PLUGIN_READBACK_MALFORMED', source, context);
   const object = parsed as Record<string, unknown>;
-  const observations = Object.entries(PLUGIN_PATHS).map(([capability, aliases]): CapabilityObservationV1 => ({
-    capability,
-    source: 'plugin_readback',
-    tier: 'loadable',
-    result: aliases.some((alias) => Object.prototype.hasOwnProperty.call(object, alias)) ? 'positive' : 'negative',
-    observedAt: context.evaluationTimestamp,
-    identityDigest: context.identityDigest,
-    detailCode: aliases.some((alias) => Object.prototype.hasOwnProperty.call(object, alias)) ? 'PLUGIN_READBACK_PRESENT' : 'PLUGIN_READBACK_ABSENT',
-    diagnostic: null,
-  }));
+  const observations = Object.entries(PLUGIN_PATHS).map(([capability, aliases]): CapabilityObservationV1 => {
+    const present = aliases.some((alias) => Object.prototype.hasOwnProperty.call(object, alias));
+    const dynamicallyInstalled = DYNAMIC_AGENT_PROJECTIONS.has(capability);
+    return {
+      capability,
+      source: 'plugin_readback',
+      tier: present ? 'loadable' : dynamicallyInstalled ? 'configured' : 'loadable',
+      result: present ? 'positive' : dynamicallyInstalled ? 'indeterminate' : 'negative',
+      observedAt: context.evaluationTimestamp,
+      identityDigest: context.identityDigest,
+      detailCode: present ? 'PLUGIN_READBACK_PRESENT'
+        : dynamicallyInstalled ? 'PLUGIN_READBACK_UNPROVEN' : 'PLUGIN_READBACK_ABSENT',
+      diagnostic: null,
+    };
+  });
   return { observations, cacheable: true, detailCode: 'PLUGIN_READBACK_PARSED' };
 }
 
