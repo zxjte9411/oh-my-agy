@@ -161,27 +161,40 @@ function childAgentMarkdown(): string {
 function parseStreamEvidence(stdout: string, expectedFinalToken: string): StreamEvidenceV1 {
   try {
     const lines = stdout.split(/\r?\n/u).filter((line) => line.trim() !== '');
-    const events = lines.map((line) => JSON.parse(line) as unknown);
-    if (events.length < 2 || events.some((event) => !plainObject(event))) {
-      return emptyStreamEvidence('custom-agent stream contains an invalid event');
+    const events: Record<string, unknown>[] = [];
+    for (const line of lines) {
+      const parsed = JSON.parse(line) as unknown;
+      if (!plainObject(parsed)) {
+        return emptyStreamEvidence('custom-agent stream contains an invalid event');
+      }
+      events.push(parsed);
+    }
+    if (events.length < 2) {
+      return emptyStreamEvidence('custom-agent stream contains too few events');
     }
     const initEvents = events.filter((event) => event.event === 'init');
     const resultEvents = events.filter((event) => event.event === 'result');
     if (initEvents.length !== 1 || resultEvents.length !== 1 || events.at(-1)?.event !== 'result') {
       return emptyStreamEvidence('custom-agent stream init/result envelope is invalid');
     }
-    const init = plainObject(initEvents[0].init) ? initEvents[0].init : null;
-    const result = plainObject(resultEvents[0].result) ? resultEvents[0].result : null;
+    const initValue = initEvents[0].init;
+    const resultValue = resultEvents[0].result;
+    const init = plainObject(initValue) ? initValue : null;
+    const result = plainObject(resultValue) ? resultValue : null;
     if (init === null || result === null) {
       return emptyStreamEvidence('custom-agent stream payload is invalid');
     }
-    const tools = Array.isArray(init.tools) ? init.tools.filter((value): value is string => typeof value === 'string') : [];
+    const tools = Array.isArray(init.tools)
+      ? init.tools.filter((value: unknown): value is string => typeof value === 'string')
+      : [];
     const childInvoked = events.some((event) => {
-      if (event.event !== 'step_update' || !plainObject(event.step_update)) return false;
-      const step = event.step_update;
+      const stepValue = event.step_update;
+      if (event.event !== 'step_update' || !plainObject(stepValue)) return false;
+      const step = stepValue;
+      const subagentInfoValue = step.subagent_info;
       if (step.state !== 'DONE' || step.step_type !== 'tool' || step.tool_name !== 'invoke_subagent'
-        || !plainObject(step.subagent_info) || !Array.isArray(step.subagent_info.subagents)) return false;
-      return step.subagent_info.subagents.some((value) =>
+        || !plainObject(subagentInfoValue) || !Array.isArray(subagentInfoValue.subagents)) return false;
+      return subagentInfoValue.subagents.some((value: unknown) =>
         plainObject(value) && value.type_name === LIVE_CUSTOM_AGENT_CHILD_V1);
     });
     return {
@@ -216,6 +229,6 @@ function emptyStreamEvidence(diagnostic: string | null): StreamEvidenceV1 {
   };
 }
 
-function plainObject(value: unknown): value is Record<string, any> {
+function plainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
