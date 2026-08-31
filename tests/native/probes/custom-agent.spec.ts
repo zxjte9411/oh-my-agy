@@ -163,9 +163,80 @@ describe('custom-agent live canary', () => {
     expect(result.observations.every(({ result: outcome }) => outcome === 'indeterminate')).toBe(true);
     expect(fs.existsSync(workspace)).toBe(false);
   });
+  test('recognizes real AGY step_type: subagent and accepts duplicated final-token lines', async () => {
+    let workspace = '';
+    const result = await runCustomAgentLiveCanary({
+      executable: '/agy',
+      context,
+      now: () => '2026-08-31T06:00:30.000Z',
+      runner: async (request) => {
+        workspace = request.cwd ?? '';
+        const finalToken = marker(valueAfter(request.argv, '--print'), 'FINAL_TOKEN');
+        return successfulStream(finalToken, true, {
+          stepType: 'subagent',
+          response: `${finalToken}\n${finalToken}\n`,
+        });
+      },
+    });
+
+    expect(result).toMatchObject({ cacheable: true, detailCode: 'LIVE_CUSTOM_AGENT_VERIFIED' });
+    expect(result.observations.find(({ capability }) => capability === 'subagent.invoke'))
+      .toMatchObject({ result: 'positive', tier: 'verified' });
+    expect(fs.existsSync(workspace)).toBe(false);
+  });
+
+  test('rejects response containing an extra unrelated line', async () => {
+    let workspace = '';
+    const result = await runCustomAgentLiveCanary({
+      executable: '/agy',
+      context,
+      now: () => '2026-08-31T06:00:30.000Z',
+      runner: async (request) => {
+        workspace = request.cwd ?? '';
+        const finalToken = marker(valueAfter(request.argv, '--print'), 'FINAL_TOKEN');
+        return successfulStream(finalToken, true, {
+          response: `${finalToken}\nunrelated extra output\n`,
+        });
+      },
+    });
+
+    expect(result).toMatchObject({ cacheable: false, detailCode: 'LIVE_CUSTOM_AGENT_MALFORMED' });
+    expect(result.observations.find(({ capability }) => capability === 'subagent.invoke'))
+      .toMatchObject({ result: 'indeterminate' });
+    expect(fs.existsSync(workspace)).toBe(false);
+  });
+
+  test('rejects child invocation when subagent type_name does not match', async () => {
+    let workspace = '';
+    const result = await runCustomAgentLiveCanary({
+      executable: '/agy',
+      context,
+      now: () => '2026-08-31T06:00:30.000Z',
+      runner: async (request) => {
+        workspace = request.cwd ?? '';
+        const finalToken = marker(valueAfter(request.argv, '--print'), 'FINAL_TOKEN');
+        return successfulStream(finalToken, true, {
+          childTypeName: 'wrong-child-agent-name',
+        });
+      },
+    });
+
+    expect(result).toMatchObject({ cacheable: false, detailCode: 'LIVE_CUSTOM_AGENT_PARTIAL' });
+    expect(result.observations.find(({ capability }) => capability === 'subagent.invoke'))
+      .toMatchObject({ result: 'indeterminate' });
+    expect(fs.existsSync(workspace)).toBe(false);
+  });
 });
 
-function successfulStream(finalToken: string, includeChild: boolean) {
+function successfulStream(
+  finalToken: string,
+  includeChild: boolean,
+  options?: {
+    stepType?: 'subagent' | 'tool';
+    childTypeName?: string;
+    response?: string;
+  },
+) {
   const events: unknown[] = [
     {
       event: 'init',
@@ -186,11 +257,11 @@ function successfulStream(finalToken: string, includeChild: boolean) {
         conversation_id: 'fixture-stream',
         step_index: 1,
         state: 'DONE',
-        step_type: 'tool',
+        step_type: options?.stepType ?? 'tool',
         tool_name: 'invoke_subagent',
         subagent_info: {
           subagents: [{
-            type_name: LIVE_CUSTOM_AGENT_CHILD_V1,
+            type_name: options?.childTypeName ?? LIVE_CUSTOM_AGENT_CHILD_V1,
             role: 'custom',
             conversation_id: 'fixture-child',
             log_uri: 'file:///tmp/fixture-child',
@@ -205,7 +276,7 @@ function successfulStream(finalToken: string, includeChild: boolean) {
     result: {
       conversation_id: 'fixture-stream',
       status: 'SUCCESS',
-      response: finalToken,
+      response: options?.response ?? finalToken,
       error: null,
     },
   });

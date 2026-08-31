@@ -199,21 +199,27 @@ function parseStreamEvidence(stdout: string, expectedFinalToken: string): Stream
       if (event.event !== 'step_update' || !plainObject(stepValue)) return false;
       const step = stepValue;
       const subagentInfoValue = step.subagent_info;
-      if (step.state !== 'DONE' || step.step_type !== 'tool' || step.tool_name !== 'invoke_subagent'
+      if (step.state !== 'DONE'
+        || !['subagent', 'tool'].includes(step.step_type as string)
+        || step.tool_name !== 'invoke_subagent'
         || !plainObject(subagentInfoValue) || !Array.isArray(subagentInfoValue.subagents)) return false;
       return subagentInfoValue.subagents.some((value: unknown) =>
         plainObject(value) && value.type_name === LIVE_CUSTOM_AGENT_CHILD_V1);
     });
+    const responseLines = typeof result.response === 'string'
+      ? result.response.split(/\r?\n/u).map((line) => line.trim()).filter((line) => line !== '')
+      : [];
+    const terminalExact = result.status === 'SUCCESS'
+      && (result.error === undefined || result.error === null || result.error === '')
+      && responseLines.length > 0
+      && responseLines.every((line) => line === expectedFinalToken);
     return {
       streamValid: true,
       mainAgentSelected: init.agent === LIVE_CUSTOM_AGENT_PARENT_V1,
       modelProjected: typeof init.model === 'string' && init.model.trim() !== '',
       invokeToolAvailable: tools.includes('invoke_subagent'),
       childInvoked,
-      terminalExact: result.status === 'SUCCESS'
-        && typeof result.response === 'string'
-        && result.response.trim() === expectedFinalToken
-        && (result.error === undefined || result.error === null || result.error === ''),
+      terminalExact,
       diagnostic: null,
     };
   } catch (cause) {
