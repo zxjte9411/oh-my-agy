@@ -34,7 +34,6 @@ describe('custom-agent live canary', () => {
       now: () => '2026-08-31T06:00:30.000Z',
       runner: async (request) => {
         workspace = request.cwd ?? '';
-        if (request.argv[0] === '--help') return advertisedHelp();
         expect(request.argv).toEqual(expect.arrayContaining([
           '--agent', LIVE_CUSTOM_AGENT_PARENT_V1,
           '--output-format', 'stream-json',
@@ -82,21 +81,25 @@ describe('custom-agent live canary', () => {
     expect(fs.existsSync(workspace)).toBe(false);
   });
 
-  test('does not execute agent canaries when the public CLI surface is not advertised', async () => {
+  test('attempts the bounded canary after explicit live opt-in even when the host rejects the flags', async () => {
     let calls = 0;
     let workspace = '';
     const result = await runCustomAgentLiveCanary({
       executable: '/agy',
       context,
+      now: () => '2026-08-31T06:00:30.000Z',
       runner: async (request) => {
         calls += 1;
         workspace = request.cwd ?? '';
-        expect(request.argv).toEqual(['--help']);
+        expect(request.argv).toEqual(expect.arrayContaining([
+          '--agent', LIVE_CUSTOM_AGENT_PARENT_V1,
+          '--output-format', 'stream-json',
+        ]));
         return {
-          status: 0,
+          status: 2,
           signal: null,
-          stdout: '--print --output-format json\n',
-          stderr: '',
+          stdout: '',
+          stderr: 'unknown option --agent',
           timedOut: false,
           outputOverflow: false,
           processCountOverflow: false,
@@ -104,11 +107,9 @@ describe('custom-agent live canary', () => {
       },
     });
 
-    expect(result).toEqual({
-      observations: [],
-      cacheable: true,
-      detailCode: 'LIVE_CUSTOM_AGENT_NOT_ADVERTISED',
-    });
+    expect(result).toMatchObject({ cacheable: false, detailCode: 'LIVE_CUSTOM_AGENT_MALFORMED' });
+    expect(result.observations).toHaveLength(8);
+    expect(result.observations.every(({ result: outcome }) => outcome === 'indeterminate')).toBe(true);
     expect(calls).toBe(1);
     expect(fs.existsSync(workspace)).toBe(false);
   });
@@ -121,7 +122,6 @@ describe('custom-agent live canary', () => {
       now: () => '2026-08-31T06:00:30.000Z',
       runner: async (request) => {
         workspace = request.cwd ?? '';
-        if (request.argv[0] === '--help') return advertisedHelp();
         const finalToken = marker(valueAfter(request.argv, '--print'), 'FINAL_TOKEN');
         return successfulStream(finalToken, false);
       },
@@ -147,7 +147,6 @@ describe('custom-agent live canary', () => {
       now: () => '2026-08-31T06:00:30.000Z',
       runner: async (request) => {
         workspace = request.cwd ?? '';
-        if (request.argv[0] === '--help') return advertisedHelp();
         return {
           status: null,
           signal: 'SIGKILL',
@@ -165,18 +164,6 @@ describe('custom-agent live canary', () => {
     expect(fs.existsSync(workspace)).toBe(false);
   });
 });
-
-function advertisedHelp() {
-  return {
-    status: 0,
-    signal: null,
-    stdout: '--print --output-format json stream-json --agent --print-timeout\n',
-    stderr: '',
-    timedOut: false,
-    outputOverflow: false,
-    processCountOverflow: false,
-  } as const;
-}
 
 function successfulStream(finalToken: string, includeChild: boolean) {
   const events: unknown[] = [
