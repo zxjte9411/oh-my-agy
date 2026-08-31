@@ -96,10 +96,8 @@ describe('native agent installation', () => {
         'utf8',
       );
       expect(orchestrator).toContain('  - invoke_subagent');
-      expect(orchestrator).toContain('mcpServers:\n  oh-my-agy-agents:\n    command: oma');
-      expect(orchestrator).toContain('      - agents\n      - mcp-server');
-      expect(orchestrator).not.toContain('mcpServers:\n  oh-my-agy:\n');
-      expect(orchestrator).not.toContain('inheritMcp');
+      expect(orchestrator).not.toContain('mcpServers:');
+      expect(first.value.mcpConfigPath).toBeNull();
       expect(orchestrator).toContain('delegation.plan');
       expect(orchestrator).toContain('delegation.reconcile');
       expect(fs.existsSync(path.join(first.value.agentsRoot, 'reviewer'))).toBe(false);
@@ -279,6 +277,97 @@ describe('native agent installation', () => {
         expect(result.error.code).toBe('E_CAPABILITY_UNPROVEN');
         expect(result.error.message).toContain('custom_agent.subagent');
       }
+    } finally {
+      fs.rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test('user-scope install writes oh-my-agy-agents to global MCP config and preserves foreign entries', () => {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'oma-agent-mcp-'));
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'oma-agent-mcp-home-'));
+    try {
+      const mcpConfigDir = path.join(home, '.gemini', 'config');
+      const mcpConfigPath = path.join(mcpConfigDir, 'mcp_config.json');
+      fs.mkdirSync(mcpConfigDir, { recursive: true });
+      fs.writeFileSync(mcpConfigPath, JSON.stringify({
+        mcpServers: {
+          'foreign-server': { command: 'foreign', args: ['--run'] }
+        }
+      }), 'utf8');
+      
+      const result = installNativeAgents({
+        scope: 'user', workspaceRoot: workspace, homeDir: home, capabilityProfile: supportedProfile(),
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      
+      const mcpConfig = JSON.parse(fs.readFileSync(mcpConfigPath, 'utf8'));
+      expect(mcpConfig.mcpServers['foreign-server']).toEqual({ command: 'foreign', args: ['--run'] });
+      expect(mcpConfig.mcpServers['oh-my-agy-agents']).toEqual({ command: 'oma', args: ['agents', 'mcp-server'] });
+      expect(result.value.mcpConfigPath).toBe(mcpConfigPath);
+    } finally {
+      fs.rmSync(workspace, { recursive: true, force: true });
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test('user-scope install is idempotent for MCP config', () => {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'oma-agent-mcp-idem-'));
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'oma-agent-mcp-idem-home-'));
+    try {
+      const first = installNativeAgents({
+        scope: 'user', workspaceRoot: workspace, homeDir: home, capabilityProfile: supportedProfile(),
+      });
+      expect(first.ok).toBe(true);
+      
+      const second = installNativeAgents({
+        scope: 'user', workspaceRoot: workspace, homeDir: home, capabilityProfile: supportedProfile(),
+      });
+      expect(second.ok).toBe(true);
+      if (second.ok) expect(second.value.idempotent).toBe(true);
+    } finally {
+      fs.rmSync(workspace, { recursive: true, force: true });
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test('doctor detects missing MCP config entry for user-scope', () => {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'oma-agent-mcp-doctor-'));
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'oma-agent-mcp-doctor-home-'));
+    try {
+      const installed = installNativeAgents({
+        scope: 'user', workspaceRoot: workspace, homeDir: home, capabilityProfile: supportedProfile(),
+      });
+      expect(installed.ok).toBe(true);
+      if (!installed.ok) return;
+
+      const mcpConfigPath = installed.value.mcpConfigPath;
+      expect(mcpConfigPath).not.toBeNull();
+      if (mcpConfigPath) {
+        fs.writeFileSync(mcpConfigPath, JSON.stringify({ mcpServers: {} }), 'utf8');
+      }
+
+      const doctor = doctorNativeAgentInstallation({
+        scope: 'user', workspaceRoot: workspace, homeDir: home, capabilityProfile: supportedProfile(),
+      });
+      expect(doctor.status).toBe('drifted');
+      expect(doctor.diagnostics.some(d => d.includes('oh-my-agy-agents'))).toBe(true);
+    } finally {
+      fs.rmSync(workspace, { recursive: true, force: true });
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test('orchestrator markdown contains no agent-local mcpServers', () => {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'oma-agent-mcp-orch-'));
+    try {
+      const result = installNativeAgents({
+        scope: 'project', workspaceRoot: workspace, capabilityProfile: supportedProfile(),
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      const orchestrator = fs.readFileSync(path.join(result.value.agentsRoot, 'orchestrator', 'agent.md'), 'utf8');
+      expect(orchestrator).not.toContain('mcpServers:');
     } finally {
       fs.rmSync(workspace, { recursive: true, force: true });
     }
