@@ -477,6 +477,119 @@ describe('native agent installation', () => {
     }
   });
 
+  test('legacy receipt upgrade explicitly migrates pre-existing exact canonical MCP entry', () => {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'oma-agent-legacy-mig-'));
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'oma-agent-legacy-mig-home-'));
+    try {
+      // First install to user scope
+      const installed = installNativeAgents({
+        scope: 'user', workspaceRoot: workspace, homeDir: home, capabilityProfile: supportedProfile(),
+      });
+      expect(installed.ok).toBe(true);
+      if (!installed.ok) return;
+
+      // Rewrite receipt to legacy shape (without mcpConfigPath / mcpServer)
+      const receiptPath = path.join(installed.value.agentsRoot, '.oma', 'receipt.json');
+      const current = JSON.parse(fs.readFileSync(receiptPath, 'utf8'));
+      const { canonicalBytesV1 } = require('../../src/contracts/state-schemas');
+      const { sha256 } = require('../../src/runtime/atomic');
+
+      const legacyBase = {
+        schema: current.schema,
+        scope: current.scope,
+        transactionId: current.transactionId,
+        installedAt: current.installedAt,
+        files: current.files,
+      };
+      const legacyReceipt = {
+        ...legacyBase,
+        receiptDigest: sha256(canonicalBytesV1(legacyBase)),
+      };
+      fs.writeFileSync(receiptPath, JSON.stringify(legacyReceipt, null, 2), 'utf8');
+
+      // Global mcp_config.json already has exact canonical entry
+      const mcpConfigDir = path.join(home, '.gemini', 'config');
+      const mcpConfigPath = path.join(mcpConfigDir, 'mcp_config.json');
+      expect(fs.existsSync(mcpConfigPath)).toBe(true);
+
+      // Re-install (upgrade path) should explicitly migrate and adopt the canonical entry
+      const upgrade = installNativeAgents({
+        scope: 'user', workspaceRoot: workspace, homeDir: home, capabilityProfile: supportedProfile(),
+      });
+      expect(upgrade.ok).toBe(true);
+      if (!upgrade.ok) return;
+      expect(upgrade.value.legacyMcpMigrated).toBe(true);
+      expect(upgrade.value.idempotent).toBe(false);
+      expect(upgrade.value.receipt.mcpServer).toBeDefined();
+
+      // Subsequent install is now cleanly idempotent
+      const nextRun = installNativeAgents({
+        scope: 'user', workspaceRoot: workspace, homeDir: home, capabilityProfile: supportedProfile(),
+      });
+      expect(nextRun.ok).toBe(true);
+      if (nextRun.ok) {
+        expect(nextRun.value.idempotent).toBe(true);
+        expect(nextRun.value.legacyMcpMigrated).toBe(false);
+      }
+    } finally {
+      fs.rmSync(workspace, { recursive: true, force: true });
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test('legacy receipt upgrade fails closed when pre-existing MCP entry is non-canonical', () => {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'oma-agent-legacy-drift-'));
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'oma-agent-legacy-drift-home-'));
+    try {
+      const installed = installNativeAgents({
+        scope: 'user', workspaceRoot: workspace, homeDir: home, capabilityProfile: supportedProfile(),
+      });
+      expect(installed.ok).toBe(true);
+      if (!installed.ok) return;
+
+      // Rewrite receipt to legacy shape
+      const receiptPath = path.join(installed.value.agentsRoot, '.oma', 'receipt.json');
+      const current = JSON.parse(fs.readFileSync(receiptPath, 'utf8'));
+      const { canonicalBytesV1 } = require('../../src/contracts/state-schemas');
+      const { sha256 } = require('../../src/runtime/atomic');
+
+      const legacyBase = {
+        schema: current.schema,
+        scope: current.scope,
+        transactionId: current.transactionId,
+        installedAt: current.installedAt,
+        files: current.files,
+      };
+      const legacyReceipt = {
+        ...legacyBase,
+        receiptDigest: sha256(canonicalBytesV1(legacyBase)),
+      };
+      fs.writeFileSync(receiptPath, JSON.stringify(legacyReceipt, null, 2), 'utf8');
+
+      // Pre-seed a drifted / foreign entry in mcp_config.json
+      const mcpConfigDir = path.join(home, '.gemini', 'config');
+      const mcpConfigPath = path.join(mcpConfigDir, 'mcp_config.json');
+      fs.writeFileSync(mcpConfigPath, JSON.stringify({
+        mcpServers: {
+          'oh-my-agy-agents': { command: 'foreign-oma', args: ['--custom'] },
+        },
+      }), 'utf8');
+
+      // Upgrade should fail closed
+      const upgrade = installNativeAgents({
+        scope: 'user', workspaceRoot: workspace, homeDir: home, capabilityProfile: supportedProfile(),
+      });
+      expect(upgrade.ok).toBe(false);
+      if (!upgrade.ok) {
+        expect(upgrade.error.code).toBe('E_ALREADY_EXISTS');
+        expect(upgrade.error.message).toContain('Refusing to adopt non-canonical MCP server entry during legacy migration');
+      }
+    } finally {
+      fs.rmSync(workspace, { recursive: true, force: true });
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   test('doctor detects drifted MCP entry when extra args or wrong command are present', () => {
     const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'oma-agent-mcp-drift-args-'));
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'oma-agent-mcp-drift-args-home-'));

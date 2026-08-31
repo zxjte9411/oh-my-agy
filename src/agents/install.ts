@@ -69,6 +69,7 @@ export interface AgentInstallReceiptV1 {
   readonly mcpConfigPath?: string | null;
   readonly mcpServer?: AgentInstallReceiptMcpV1 | null;
   readonly receiptDigest: string;
+  readonly isLegacyReceipt?: boolean;
 }
 
 export interface NativeAgentInstallOptionsV1 {
@@ -86,6 +87,7 @@ export interface NativeAgentInstallResultV1 {
   readonly receiptPath: string;
   readonly mcpConfigPath: string | null;
   readonly idempotent: boolean;
+  readonly legacyMcpMigrated: boolean;
   readonly receipt: AgentInstallReceiptV1;
   readonly delegation: NativeDelegationCapabilityV1;
 }
@@ -207,6 +209,7 @@ export function installNativeAgents(
   if (!previousReceipt.ok) return previousReceipt;
 
   const mcpConfigPath = resolveMcpConfigPath(options.scope, options.workspaceRoot, options.homeDir);
+  let legacyMcpMigrated = false;
 
   if (previousReceipt.value === null) {
     const collision = desired.find(({ targetPath }) => fs.existsSync(targetPath));
@@ -241,6 +244,43 @@ export function installNativeAgents(
   } else {
     const ownership = verifyOwnedFiles(agentsRoot, previousReceipt.value);
     if (!ownership.ok) return ownership;
+
+    if (mcpConfigPath && nativeDelegationAvailable && fs.existsSync(mcpConfigPath)) {
+      const safeMcp = validateMcpConfigPath(mcpConfigPath);
+      if (!safeMcp.ok) return safeMcp;
+      try {
+        const config = JSON.parse(fs.readFileSync(mcpConfigPath, 'utf8'));
+        if (typeof config === 'object' && config !== null && !Array.isArray(config)
+          && config.mcpServers && typeof config.mcpServers === 'object' && !Array.isArray(config.mcpServers)) {
+          const existing = config.mcpServers[CANONICAL_OMA_MCP_SERVER_NAME];
+          if (existing !== undefined) {
+            if (previousReceipt.value.isLegacyReceipt) {
+              if (isCanonicalMcpEntry(existing)) {
+                legacyMcpMigrated = true;
+              } else {
+                return err(runtimeError(
+                  'E_ALREADY_EXISTS',
+                  `Refusing to adopt non-canonical MCP server entry during legacy migration: ${CANONICAL_OMA_MCP_SERVER_NAME}`,
+                ));
+              }
+            } else if (previousReceipt.value.mcpServer && !isCanonicalMcpEntry(existing)) {
+              return err(runtimeError(
+                'E_ALREADY_EXISTS',
+                `Refusing to overwrite a modified or foreign MCP server entry: ${CANONICAL_OMA_MCP_SERVER_NAME}`,
+              ));
+            }
+          }
+        }
+      } catch (cause) {
+        if (cause instanceof SyntaxError) {
+          return err(runtimeError('E_CORRUPT_STATE', 'MCP config file is invalid JSON', {
+            cause: cause.message,
+          }));
+        }
+        throw cause;
+      }
+    }
+
     const desiredById = new Map(desired.map((entry) => [entry.id, entry.digest]));
     let mcpHealthy = true;
     if (mcpConfigPath && nativeDelegationAvailable) {
@@ -252,6 +292,7 @@ export function installNativeAgents(
     const expectedMcpConfigPath = nativeDelegationAvailable ? mcpConfigPath : null;
     const identical = previousReceipt.value.files.every((file) => desiredById.get(file.id) === file.sha256)
       && (previousReceipt.value.mcpConfigPath ?? null) === expectedMcpConfigPath
+      && !previousReceipt.value.isLegacyReceipt
       && mcpHealthy;
     if (identical) {
       return ok({
@@ -260,6 +301,7 @@ export function installNativeAgents(
         receiptPath,
         mcpConfigPath: previousReceipt.value.mcpConfigPath ?? null,
         idempotent: true,
+        legacyMcpMigrated: false,
         receipt: previousReceipt.value,
         delegation,
       });
@@ -310,6 +352,7 @@ export function installNativeAgents(
       receiptPath,
       mcpConfigPath: effectiveMcpConfigPath,
       idempotent: false,
+      legacyMcpMigrated,
       receipt,
       delegation,
     });
@@ -582,16 +625,13 @@ function readReceipt(
     if (!/^[a-f0-9]{64}$/u.test(receiptDigest as string) || receiptDigest !== sha256(canonicalBytesV1(base))) {
       throw new Error('receipt digest is invalid');
     }
+    const isLegacyReceipt = value.mcpServer === undefined && value.mcpConfigPath === undefined;
     const mcpConfigPath = typeof value.mcpConfigPath === 'string'
       ? value.mcpConfigPath
       : value.mcpServer && typeof (value.mcpServer as any).configPath === 'string'
         ? (value.mcpServer as any).configPath
         : null;
-    const mcpServer = (value.mcpServer as AgentInstallReceiptMcpV1 | null | undefined) ?? (mcpConfigPath ? {
-      serverName: CANONICAL_OMA_MCP_SERVER_NAME,
-      configPath: mcpConfigPath,
-      entryDigest: canonicalMcpEntryDigest(),
-    } : null);
+    const mcpServer = (value.mcpServer as AgentInstallReceiptMcpV1 | null | undefined) ?? null;
     return ok({
       schema: value.schema as typeof AGENT_INSTALL_RECEIPT_SCHEMA_V1,
       scope: value.scope as AgentInstallScopeV1,
@@ -601,6 +641,7 @@ function readReceipt(
       mcpConfigPath,
       mcpServer,
       receiptDigest: receiptDigest as string,
+      isLegacyReceipt,
     });
   } catch (cause) {
     return err(runtimeError(
