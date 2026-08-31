@@ -135,8 +135,19 @@ export function completeLiveCapabilityProbeCoverage(
   observations: readonly CapabilityObservationV1[],
   context: Readonly<LiveProbeContextV1>,
 ): CapabilityObservationV1[] {
-  const covered = new Set(
+  const positiveLiveCapabilities = new Set(
     observations
+      .filter(({ source, result }) => source === 'live_probe' && result === 'positive')
+      .map(({ capability }) => capability),
+  );
+  const normalized = observations.filter((observation) => !(
+    observation.source === 'structured_init'
+      && observation.result === 'indeterminate'
+      && observation.detailCode === 'STRUCTURED_INIT_FIELD_UNAVAILABLE'
+      && positiveLiveCapabilities.has(observation.capability)
+  ));
+  const covered = new Set(
+    normalized
       .filter(({ source }) => source === 'live_probe')
       .map(({ capability }) => capability),
   );
@@ -152,7 +163,7 @@ export function completeLiveCapabilityProbeCoverage(
       detailCode: `LIVE_${sideEffect.toUpperCase()}_PROBE_UNAVAILABLE`,
       diagnostic: null,
     }));
-  return [...observations, ...unavailable];
+  return [...normalized, ...unavailable];
 }
 
 function liveOutputMatches(
