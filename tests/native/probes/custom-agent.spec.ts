@@ -234,7 +234,7 @@ describe('custom-agent live canary', () => {
       },
     });
 
-    expect(result).toMatchObject({ cacheable: false, detailCode: 'LIVE_CUSTOM_AGENT_MALFORMED' });
+    expect(result).toMatchObject({ cacheable: false, detailCode: 'LIVE_CUSTOM_AGENT_PARTIAL' });
     expect(result.observations.find(({ capability }) => capability === 'subagent.invoke'))
       .toMatchObject({ result: 'indeterminate' });
     expect(fs.existsSync(workspace)).toBe(false);

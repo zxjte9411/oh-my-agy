@@ -45,7 +45,6 @@ export function isCanonicalMcpEntry(entry: unknown): boolean {
 const REQUIRED_AGENT_CAPABILITIES = Object.freeze([
   'custom_agent.markdown',
   'custom_agent.main_agent',
-  'custom_agent.subagent',
 ] as const);
 
 export interface AgentInstallReceiptFileV1 {

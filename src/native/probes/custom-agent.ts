@@ -95,25 +95,25 @@ export async function runCustomAgentLiveCanary(
     const evidence = boundedClean
       ? parseStreamEvidence(outcome.stdout, finalToken)
       : emptyStreamEvidence(redactDiagnostic(`${outcome.stderr}\n${outcome.error ?? ''}`, 4096));
-    const coreSelected = boundedClean && evidence.streamValid
-      && evidence.mainAgentSelected && evidence.invokeToolAvailable && evidence.terminalExact;
-    const coreStaticDelegationVerified = coreSelected && evidence.staticChildInvoked;
+    const mainAgentProven = boundedClean && evidence.streamValid && evidence.mainAgentSelected;
+    const coreStaticDelegationVerified = mainAgentProven && evidence.invokeToolAvailable
+      && evidence.staticChildInvoked && evidence.terminalExact;
     const detailCode = outcome.timedOut ? 'LIVE_CUSTOM_AGENT_TIMEOUT'
       : outcome.outputOverflow ? 'LIVE_CUSTOM_AGENT_OVERFLOW'
         : outcome.processCountOverflow ? 'LIVE_CUSTOM_AGENT_PROCESS_OVERFLOW'
           : outcome.error === 'E_PROBE_PROCESS_COUNT_UNAVAILABLE' ? 'LIVE_CUSTOM_AGENT_PROCESS_LIMIT_UNAVAILABLE'
             : coreStaticDelegationVerified ? 'LIVE_CUSTOM_AGENT_VERIFIED'
-              : coreSelected ? 'LIVE_CUSTOM_AGENT_PARTIAL' : 'LIVE_CUSTOM_AGENT_MALFORMED';
+              : mainAgentProven ? 'LIVE_CUSTOM_AGENT_PARTIAL' : 'LIVE_CUSTOM_AGENT_MALFORMED';
     const diagnostic = coreStaticDelegationVerified ? null : evidence.diagnostic;
     const observations: CapabilityObservationV1[] = [
-      observation('custom_agent.markdown', coreSelected, 'observed', timestamp, request.context, detailCode, diagnostic),
-      observation('custom_agent.main_agent', coreSelected, 'observed', timestamp, request.context, detailCode, diagnostic),
+      observation('custom_agent.markdown', mainAgentProven, 'observed', timestamp, request.context, detailCode, diagnostic),
+      observation('custom_agent.main_agent', mainAgentProven, 'observed', timestamp, request.context, detailCode, diagnostic),
       observation('custom_agent.command_execution_policy', false, 'observed', timestamp, request.context, detailCode, diagnostic),
-      observation('custom_agent.model', coreSelected && evidence.modelProjected, 'observed', timestamp, request.context, detailCode, diagnostic),
+      observation('custom_agent.model', mainAgentProven && evidence.modelProjected, 'observed', timestamp, request.context, detailCode, diagnostic),
       observation('custom_agent.subagent', coreStaticDelegationVerified, 'verified', timestamp, request.context, detailCode, diagnostic),
       observation('subagent.define', boundedClean && evidence.dynamicSubagentDefined, 'verified', timestamp, request.context, detailCode, diagnostic),
-      observation('subagent.invoke', coreSelected && (evidence.staticChildInvoked || evidence.dynamicChildInvoked), 'verified', timestamp, request.context, detailCode, diagnostic),
-      observation('headless.stream_json', coreSelected, 'verified', timestamp, request.context, detailCode, diagnostic),
+      observation('subagent.invoke', coreStaticDelegationVerified || (mainAgentProven && evidence.dynamicChildInvoked && evidence.terminalExact), 'verified', timestamp, request.context, detailCode, diagnostic),
+      observation('headless.stream_json', boundedClean && evidence.streamValid, 'verified', timestamp, request.context, detailCode, diagnostic),
     ];
     return { observations, cacheable: coreStaticDelegationVerified, detailCode };
   } finally {

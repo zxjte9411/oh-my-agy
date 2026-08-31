@@ -18,7 +18,6 @@ import { CANONICAL_AGENT_IDS_V1 } from '../../src/agents/types';
 const REQUIRED = [
   'custom_agent.markdown',
   'custom_agent.main_agent',
-  'custom_agent.subagent',
 ] as const;
 
 function supportedProfile(nativeDelegation = true) {
@@ -52,6 +51,16 @@ function supportedProfile(nativeDelegation = true) {
     diagnostic: null,
   }));
   if (nativeDelegation) {
+    observations.push({
+      capability: 'custom_agent.subagent',
+      source: 'live_probe',
+      tier: 'verified',
+      result: 'positive',
+      observedAt: now,
+      identityDigest,
+      detailCode: 'LIVE_CUSTOM_AGENT_VERIFIED',
+      diagnostic: null,
+    });
     observations.push({
       capability: 'subagent.invoke',
       source: 'live_probe',
@@ -260,10 +269,6 @@ describe('native agent installation', () => {
           capability: 'custom_agent.markdown', source: 'help', tier: 'observed', result: 'positive',
           observedAt: now, identityDigest: hostCapabilityIdentityDigest(host, plugin), detailCode: 'T', diagnostic: null,
         },
-        {
-          capability: 'custom_agent.main_agent', source: 'help', tier: 'observed', result: 'positive',
-          observedAt: now, identityDigest: hostCapabilityIdentityDigest(host, plugin), detailCode: 'T', diagnostic: null,
-        },
       ];
       const profile = assembleHostCapabilityProfile({
         evaluationTimestamp: now, hostIdentityBefore: host, hostIdentityAfter: host,
@@ -275,7 +280,7 @@ describe('native agent installation', () => {
       expect(result.ok).toBe(false);
       if (!result.ok) {
         expect(result.error.code).toBe('E_CAPABILITY_UNPROVEN');
-        expect(result.error.message).toContain('custom_agent.subagent');
+        expect(result.error.message).toContain('custom_agent.main_agent');
       }
     } finally {
       fs.rmSync(workspace, { recursive: true, force: true });
