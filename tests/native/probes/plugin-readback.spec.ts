@@ -12,12 +12,30 @@ const context: PassiveProbeContextV1 = {
 };
 
 describe('plugin readback', () => {
-  it('classifies present and affirmative absent fields', () => {
+  it('classifies present and affirmative absent plugin-owned fields', () => {
     const result = parsePluginReadback('{"skills":[],"hooks.json":{},"mcp_config":true}', context);
     expect(result.observations.find(({ capability }) => capability === 'plugin.skills')?.result).toBe('positive');
     expect(result.observations.find(({ capability }) => capability === 'plugin.rules')?.result).toBe('negative');
     expect(result.observations.find(({ capability }) => capability === 'plugin.mcp_config')?.result).toBe('positive');
     expect(result.observations.find(({ capability }) => capability === 'mcp.local_config')?.result).toBe('positive');
+  });
+
+  it('keeps dynamically installed native-agent fields unproven when absent from plugin inventory', () => {
+    const result = parsePluginReadback('{"skills":[],"hooks.json":{},"mcp_config":true}', context);
+    for (const capability of [
+      'custom_agent.markdown',
+      'custom_agent.main_agent',
+      'custom_agent.subagent',
+      'custom_agent.hidden',
+      'subagent.define',
+    ]) {
+      expect(result.observations.find((entry) => entry.capability === capability)).toMatchObject({
+        source: 'plugin_readback',
+        result: 'indeterminate',
+        tier: 'configured',
+        detailCode: 'PLUGIN_READBACK_UNPROVEN',
+      });
+    }
   });
 
   it('treats malformed and oversized JSON as indeterminate', () => {

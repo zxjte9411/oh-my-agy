@@ -22,13 +22,16 @@ const NATIVE_ORCHESTRATOR_TOOLS = Object.freeze([
 
 export interface RenderCanonicalAgentOptionsV1 {
   readonly nativeDelegationAvailable?: boolean;
+  readonly modelProjectionAvailable?: boolean;
+  readonly commandExecutionPolicyAvailable?: boolean;
 }
 
 export interface RenderedNativeAgentV1 {
   readonly id: CanonicalAgentIdV1;
   readonly markdown: string;
   readonly tools: readonly string[];
-  readonly commandExecutionPolicy: NativeAgentCommandExecutionPolicyV1;
+  readonly commandExecutionPolicy: NativeAgentCommandExecutionPolicyV1 | null;
+  readonly model: string | null;
   readonly omaMcpConfigured: boolean;
 }
 
@@ -59,8 +62,8 @@ export function renderCanonicalAgent(
     ...tools.map((tool) => `  - ${tool}`),
     `mainAgent: ${String(definition.mainAgent)}`,
     `subagent: ${String(definition.subagent)}`,
-    `model: ${definition.preferredModelTier}`,
-    `commandExecutionPolicy: ${commandExecutionPolicy}`,
+    ...(options.modelProjectionAvailable === true ? [`model: ${definition.preferredModelTier}`] : []),
+    ...(options.commandExecutionPolicyAvailable === true ? [`commandExecutionPolicy: ${commandExecutionPolicy}`] : []),
     ...(nativeDelegationAvailable ? [
       'mcpServers:',
       '  oh-my-agy-agents:',
@@ -78,7 +81,8 @@ export function renderCanonicalAgent(
     id,
     markdown: lines.join('\n'),
     tools,
-    commandExecutionPolicy,
+    commandExecutionPolicy: options.commandExecutionPolicyAvailable === true ? commandExecutionPolicy : null,
+    model: options.modelProjectionAvailable === true ? definition.preferredModelTier : null,
     omaMcpConfigured: nativeDelegationAvailable,
   });
 }

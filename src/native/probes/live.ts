@@ -5,6 +5,7 @@ import { assertCanonicalUtcTimestamp } from '../../contracts/state-schemas';
 import { redactDiagnostic } from '../../runtime/redaction';
 import { CapabilityObservationV1 } from '../capability-profile';
 import { HOST_CAPABILITY_POLICY_REGISTRY_V1 } from '../capability-profile';
+import { runCustomAgentLiveCanary } from './custom-agent';
 import { BoundedProbeRunnerV1, LiveProbeContextV1, ProbeResultV1 } from './types';
 import { runBoundedProbe } from './runner';
 import { probeStructuredInitOutput } from './structured-init';
@@ -95,14 +96,34 @@ export async function runExplicitLiveProbe(request: Readonly<LiveProbeRequestV1>
     const structured = exact && request.outputContract === 'agy_json'
       ? probeStructuredInitOutput(outcome.stdout, completedContext, new Set([request.capability]))
       : { observations: [], cacheable: exact, detailCode: 'STRUCTURED_INIT_NOT_APPLICABLE' };
+    const agentCanary = exact && isReadOnlySandboxCanary(request)
+      ? await runCustomAgentLiveCanary({
+        executable: request.executable,
+        environment,
+        context: completedContext,
+      })
+      : { observations: [], cacheable: true, detailCode: 'CUSTOM_AGENT_LIVE_NOT_APPLICABLE' };
     return {
-      observations: [observation, ...structured.observations],
-      cacheable: exact && structured.cacheable,
+      observations: [observation, ...structured.observations, ...agentCanary.observations],
+      cacheable: exact && structured.cacheable && agentCanary.cacheable,
       detailCode,
     };
   } finally {
     fs.rmSync(scratch, { recursive: true, force: true });
   }
+}
+
+/**
+ * Read-only headless 是 live probe 最後一個 required sandbox canary；成功後才附帶
+ * workspace-local custom-agent canary。Agent canary 失敗不改寫 headless 的 detailCode，
+ * 只留下 indeterminate agent evidence，讓 installer/delegation gate 自己 fail closed。
+ */
+function isReadOnlySandboxCanary(request: Readonly<LiveProbeRequestV1>): boolean {
+  if (request.capability !== 'headless.print' || request.outputContract === 'agy_json') return false;
+  const modeIndex = request.argv.indexOf('--mode');
+  return request.argv.includes('--sandbox')
+    && modeIndex >= 0
+    && request.argv[modeIndex + 1] === 'plan';
 }
 
 /**
@@ -114,8 +135,17 @@ export function completeLiveCapabilityProbeCoverage(
   observations: readonly CapabilityObservationV1[],
   context: Readonly<LiveProbeContextV1>,
 ): CapabilityObservationV1[] {
-  const covered = new Set(
+  const positiveLiveCapabilities = new Set(
     observations
+      .filter(({ source, result }) => source === 'live_probe' && result === 'positive')
+      .map(({ capability }) => capability),
+  );
+  const normalized = observations.filter((observation) => !(
+    positiveLiveCapabilities.has(observation.capability)
+      && isWeakUnprovenRead(observation)
+  ));
+  const covered = new Set(
+    normalized
       .filter(({ source }) => source === 'live_probe')
       .map(({ capability }) => capability),
   );
@@ -131,7 +161,21 @@ export function completeLiveCapabilityProbeCoverage(
       detailCode: `LIVE_${sideEffect.toUpperCase()}_PROBE_UNAVAILABLE`,
       diagnostic: null,
     }));
-  return [...observations, ...unavailable];
+  return [...normalized, ...unavailable];
+}
+
+/**
+ * 只有「這個被動 surface 沒有提供欄位」可被同 capability 的 fresh live positive 取代。
+ * malformed/timeout/overflow、negative、identity drift 等證據全部保留，避免降低 fail-closed 強度。
+ */
+function isWeakUnprovenRead(observation: Readonly<CapabilityObservationV1>): boolean {
+  if (observation.result !== 'indeterminate') return false;
+  return (observation.source === 'structured_init'
+      && observation.detailCode === 'STRUCTURED_INIT_FIELD_UNAVAILABLE')
+    || (observation.source === 'config'
+      && observation.detailCode === 'CONFIG_FIELD_UNPROVEN')
+    || (observation.source === 'plugin_readback'
+      && observation.detailCode === 'PLUGIN_READBACK_UNPROVEN');
 }
 
 function liveOutputMatches(

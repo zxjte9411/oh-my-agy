@@ -26,8 +26,6 @@ const REQUIRED_AGENT_CAPABILITIES = Object.freeze([
   'custom_agent.markdown',
   'custom_agent.main_agent',
   'custom_agent.subagent',
-  'custom_agent.model',
-  'custom_agent.command_execution_policy',
 ] as const);
 
 export interface AgentInstallReceiptFileV1 {
@@ -119,6 +117,26 @@ export function validateNativeAgentCapabilityProfile(
   return ok(profile);
 }
 
+export function isCapabilityProven(profile: HostCapabilityProfileV1, key: string): boolean {
+  const policy = HOST_CAPABILITY_POLICY_REGISTRY_V1.find((p) => p.key === key);
+  const assessment = profile.capabilities.find((c) => c.key === key);
+  if (policy === undefined || assessment === undefined || assessment.outcome !== 'supported' || assessment.tier === null) {
+    return false;
+  }
+  return EVIDENCE_TIERS.indexOf(assessment.tier) >= EVIDENCE_TIERS.indexOf(policy.routeTier);
+}
+
+function resolveRenderOptions(
+  profile: HostCapabilityProfileV1,
+  nativeDelegationAvailable: boolean,
+) {
+  return {
+    nativeDelegationAvailable,
+    modelProjectionAvailable: isCapabilityProven(profile, 'custom_agent.model'),
+    commandExecutionPolicyAvailable: isCapabilityProven(profile, 'custom_agent.command_execution_policy'),
+  };
+}
+
 /**
  * 僅管理七個 OMA canonical agent 目標；其他使用者 agents 永遠不刪除。
  * 每次寫入前驗證舊 receipt ownership，寫完逐檔 read-back；任何失敗還原快照。
@@ -130,11 +148,12 @@ export function installNativeAgents(
   if (!capability.ok) return capability;
   const delegation = assessNativeDelegationCapability(capability.value);
   const nativeDelegationAvailable = delegation.status === 'available';
+  const renderOptions = resolveRenderOptions(capability.value, nativeDelegationAvailable);
   const agentsRoot = resolveNativeAgentRoot(options.scope, options.workspaceRoot, options.homeDir);
   const receiptPath = path.join(agentsRoot, '.oma', 'receipt.json');
   const safeRoot = validateAgentsRoot(agentsRoot);
   if (!safeRoot.ok) return safeRoot;
-  const desired = renderAllCanonicalAgents({ nativeDelegationAvailable }).map((agent) => ({
+  const desired = renderAllCanonicalAgents(renderOptions).map((agent) => ({
     id: agent.id,
     relativePath: `${agent.id}/agent.md`,
     targetPath: path.join(agentsRoot, agent.id, 'agent.md'),
@@ -285,7 +304,8 @@ export function doctorNativeAgentInstallation(
       delegation,
     };
   }
-  const desired = new Map(renderAllCanonicalAgents({ nativeDelegationAvailable })
+  const renderOptions = resolveRenderOptions(capability.value, nativeDelegationAvailable);
+  const desired = new Map(renderAllCanonicalAgents(renderOptions)
     .map((agent) => [agent.id, sha256(agent.markdown)]));
   const stale = receipt.value.files.filter((file) => desired.get(file.id) !== file.sha256).map(({ id }) => id);
   if (stale.length > 0) {

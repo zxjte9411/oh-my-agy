@@ -1,5 +1,6 @@
 export * from './cache';
 export * from './config';
+export * from './custom-agent';
 export * from './help';
 export * from './identity';
 export * from './live';
