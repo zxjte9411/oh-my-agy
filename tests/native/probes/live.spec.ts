@@ -49,18 +49,23 @@ describe('explicit live probe', () => {
     ]));
   });
 
-  it('lets positive live evidence supersede only structured field unavailability for the same capability', () => {
+  it('lets positive live evidence supersede only weak unproven reads for the same capability', () => {
+    const weakUnproven = [
+      { source: 'structured_init' as const, tier: 'observed' as const, detailCode: 'STRUCTURED_INIT_FIELD_UNAVAILABLE' },
+      { source: 'config' as const, tier: 'configured' as const, detailCode: 'CONFIG_FIELD_UNPROVEN' },
+      { source: 'plugin_readback' as const, tier: 'configured' as const, detailCode: 'PLUGIN_READBACK_UNPROVEN' },
+    ];
     const coverage = completeLiveCapabilityProbeCoverage([
-      {
+      ...weakUnproven.map(({ source, tier, detailCode }) => ({
         capability: 'custom_agent.markdown',
-        source: 'structured_init',
-        tier: 'observed',
-        result: 'indeterminate',
+        source,
+        tier,
+        result: 'indeterminate' as const,
         observedAt: context.evaluationTimestamp,
         identityDigest: context.identityDigest,
-        detailCode: 'STRUCTURED_INIT_FIELD_UNAVAILABLE',
+        detailCode,
         diagnostic: null,
-      },
+      })),
       {
         capability: 'custom_agent.markdown',
         source: 'live_probe',
@@ -73,12 +78,22 @@ describe('explicit live probe', () => {
       },
       {
         capability: 'custom_agent.model',
-        source: 'structured_init',
-        tier: 'observed',
+        source: 'config',
+        tier: 'configured',
         result: 'indeterminate',
         observedAt: context.evaluationTimestamp,
         identityDigest: context.identityDigest,
-        detailCode: 'STRUCTURED_INIT_FIELD_UNAVAILABLE',
+        detailCode: 'CONFIG_FIELD_UNPROVEN',
+        diagnostic: null,
+      },
+      {
+        capability: 'custom_agent.markdown',
+        source: 'plugin_readback',
+        tier: 'configured',
+        result: 'indeterminate',
+        observedAt: context.evaluationTimestamp,
+        identityDigest: context.identityDigest,
+        detailCode: 'PLUGIN_READBACK_MALFORMED',
         diagnostic: null,
       },
     ], context);
@@ -91,18 +106,26 @@ describe('explicit live probe', () => {
       }),
       expect.objectContaining({
         capability: 'custom_agent.model',
-        source: 'structured_init',
+        source: 'config',
         result: 'indeterminate',
-        detailCode: 'STRUCTURED_INIT_FIELD_UNAVAILABLE',
+        detailCode: 'CONFIG_FIELD_UNPROVEN',
       }),
-    ]));
-    expect(coverage).not.toEqual(expect.arrayContaining([
       expect.objectContaining({
         capability: 'custom_agent.markdown',
-        source: 'structured_init',
-        detailCode: 'STRUCTURED_INIT_FIELD_UNAVAILABLE',
+        source: 'plugin_readback',
+        result: 'indeterminate',
+        detailCode: 'PLUGIN_READBACK_MALFORMED',
       }),
     ]));
+    for (const { source, detailCode } of weakUnproven) {
+      expect(coverage).not.toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          capability: 'custom_agent.markdown',
+          source,
+          detailCode,
+        }),
+      ]));
+    }
   });
 
   it('requires explicit opt-in and preserves malformed/timeout as indeterminate', async () => {
