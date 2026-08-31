@@ -10,7 +10,12 @@ import {
 } from '../capability-profile';
 import { redactDiagnostic } from '../../runtime/redaction';
 import { runBoundedProbe } from './runner';
-import { BoundedProbeRunnerV1, LiveProbeContextV1, ProbeResultV1 } from './types';
+import {
+  BoundedProbeRunnerV1,
+  LiveProbeContextV1,
+  PASSIVE_PROBE_LIMITS_V1,
+  ProbeResultV1,
+} from './types';
 
 export const LIVE_CUSTOM_AGENT_PARENT_V1 = 'oma-live-probe-main' as const;
 export const LIVE_CUSTOM_AGENT_CHILD_V1 = 'oma-live-probe-child' as const;
@@ -62,7 +67,21 @@ export async function runCustomAgentLiveCanary(
   const finalToken = `oma-agent-final-${crypto.randomBytes(12).toString('hex')}`;
   const childToken = `oma-agent-child-${crypto.randomBytes(12).toString('hex')}`;
   const observedAt = () => (request.now ?? (() => new Date().toISOString()))();
+  const runner = request.runner ?? runBoundedProbe;
   try {
+    const helpOutcome = await runner({
+      command: request.executable,
+      argv: ['--help'],
+      cwd: workspace,
+      environment: request.environment,
+      timeoutMs: PASSIVE_PROBE_LIMITS_V1.timeoutMs,
+      maximumOutputBytes: PASSIVE_PROBE_LIMITS_V1.maximumOutputBytes,
+      maximumProcesses: PASSIVE_PROBE_LIMITS_V1.maximumProcesses,
+    });
+    if (!advertisesCustomAgentSurface(helpOutcome)) {
+      return { observations: [], cacheable: true, detailCode: 'LIVE_CUSTOM_AGENT_NOT_ADVERTISED' };
+    }
+
     writeCanaryAgent(workspace, LIVE_CUSTOM_AGENT_PARENT_V1, parentAgentMarkdown());
     writeCanaryAgent(workspace, LIVE_CUSTOM_AGENT_CHILD_V1, childAgentMarkdown());
     const prompt = [
@@ -74,7 +93,7 @@ export async function runCustomAgentLiveCanary(
       'Do not invoke any built-in subagent.',
       'After the custom subagent invocation is accepted, reply with exactly the value of FINAL_TOKEN and nothing else.',
     ].join('\n');
-    const outcome = await (request.runner ?? runBoundedProbe)({
+    const outcome = await runner({
       command: request.executable,
       argv: [
         '--agent', LIVE_CUSTOM_AGENT_PARENT_V1,
@@ -121,6 +140,22 @@ export async function runCustomAgentLiveCanary(
   } finally {
     fs.rmSync(workspace, { recursive: true, force: true });
   }
+}
+
+function advertisesCustomAgentSurface(outcome: Readonly<{
+  status: number | null;
+  stdout: string;
+  stderr: string;
+  timedOut: boolean;
+  outputOverflow: boolean;
+  processCountOverflow: boolean;
+  error?: string;
+}>): boolean {
+  if (outcome.status !== 0 || outcome.timedOut || outcome.outputOverflow
+    || outcome.processCountOverflow || outcome.error !== undefined) return false;
+  const help = `${outcome.stdout}\n${outcome.stderr}`;
+  return /(?:^|\s)--agent(?:[\s=,]|$)/mu.test(help)
+    && /(?:^|[\s,(|])(?:--)?stream-json(?=$|[\s,):|])/imu.test(help);
 }
 
 function observation(
