@@ -141,10 +141,8 @@ export function completeLiveCapabilityProbeCoverage(
       .map(({ capability }) => capability),
   );
   const normalized = observations.filter((observation) => !(
-    observation.source === 'structured_init'
-      && observation.result === 'indeterminate'
-      && observation.detailCode === 'STRUCTURED_INIT_FIELD_UNAVAILABLE'
-      && positiveLiveCapabilities.has(observation.capability)
+    positiveLiveCapabilities.has(observation.capability)
+      && isWeakUnprovenRead(observation)
   ));
   const covered = new Set(
     normalized
@@ -164,6 +162,20 @@ export function completeLiveCapabilityProbeCoverage(
       diagnostic: null,
     }));
   return [...normalized, ...unavailable];
+}
+
+/**
+ * 只有「這個被動 surface 沒有提供欄位」可被同 capability 的 fresh live positive 取代。
+ * malformed/timeout/overflow、negative、identity drift 等證據全部保留，避免降低 fail-closed 強度。
+ */
+function isWeakUnprovenRead(observation: Readonly<CapabilityObservationV1>): boolean {
+  if (observation.result !== 'indeterminate') return false;
+  return (observation.source === 'structured_init'
+      && observation.detailCode === 'STRUCTURED_INIT_FIELD_UNAVAILABLE')
+    || (observation.source === 'config'
+      && observation.detailCode === 'CONFIG_FIELD_UNPROVEN')
+    || (observation.source === 'plugin_readback'
+      && observation.detailCode === 'PLUGIN_READBACK_UNPROVEN');
 }
 
 function liveOutputMatches(
