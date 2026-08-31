@@ -38,16 +38,6 @@ export interface CustomAgentLiveCanaryRequestV1 {
   readonly now?: () => string;
 }
 
-interface StreamEvidenceV1 {
-  readonly streamValid: boolean;
-  readonly mainAgentSelected: boolean;
-  readonly modelProjected: boolean;
-  readonly invokeToolAvailable: boolean;
-  readonly childInvoked: boolean;
-  readonly terminalExact: boolean;
-  readonly diagnostic: string | null;
-}
-
 /**
  * 使用 workspace-local Markdown agents 做真實 Antigravity live canary。
  * `native probe --live` 已是明確的副作用 opt-in，因此不再以 help text 當執行 gate；
@@ -76,8 +66,9 @@ export async function runCustomAgentLiveCanary(
       `CHILD_AGENT=${LIVE_CUSTOM_AGENT_CHILD_V1}`,
       `CHILD_TOKEN=${childToken}`,
       `FINAL_TOKEN=${finalToken}`,
-      `Invoke the custom subagent named ${LIVE_CUSTOM_AGENT_CHILD_V1} exactly once.`,
+      `Invoke the pre-existing custom subagent named ${LIVE_CUSTOM_AGENT_CHILD_V1} exactly once using invoke_subagent.`,
       `Ask that child to reply with exactly ${childToken}.`,
+      'Do not call define_subagent. Do not dynamically create or register any subagent.',
       'Do not invoke any built-in subagent.',
       'After the custom subagent invocation is accepted, reply with exactly the value of FINAL_TOKEN and nothing else.',
     ].join('\n');
@@ -106,25 +97,25 @@ export async function runCustomAgentLiveCanary(
       : emptyStreamEvidence(redactDiagnostic(`${outcome.stderr}\n${outcome.error ?? ''}`, 4096));
     const coreSelected = boundedClean && evidence.streamValid
       && evidence.mainAgentSelected && evidence.invokeToolAvailable && evidence.terminalExact;
-    const coreDelegationVerified = coreSelected && evidence.childInvoked;
+    const coreStaticDelegationVerified = coreSelected && evidence.staticChildInvoked;
     const detailCode = outcome.timedOut ? 'LIVE_CUSTOM_AGENT_TIMEOUT'
       : outcome.outputOverflow ? 'LIVE_CUSTOM_AGENT_OVERFLOW'
         : outcome.processCountOverflow ? 'LIVE_CUSTOM_AGENT_PROCESS_OVERFLOW'
           : outcome.error === 'E_PROBE_PROCESS_COUNT_UNAVAILABLE' ? 'LIVE_CUSTOM_AGENT_PROCESS_LIMIT_UNAVAILABLE'
-            : coreDelegationVerified ? 'LIVE_CUSTOM_AGENT_VERIFIED'
+            : coreStaticDelegationVerified ? 'LIVE_CUSTOM_AGENT_VERIFIED'
               : coreSelected ? 'LIVE_CUSTOM_AGENT_PARTIAL' : 'LIVE_CUSTOM_AGENT_MALFORMED';
-    const diagnostic = coreDelegationVerified ? null : evidence.diagnostic;
+    const diagnostic = coreStaticDelegationVerified ? null : evidence.diagnostic;
     const observations: CapabilityObservationV1[] = [
       observation('custom_agent.markdown', coreSelected, 'observed', timestamp, request.context, detailCode, diagnostic),
       observation('custom_agent.main_agent', coreSelected, 'observed', timestamp, request.context, detailCode, diagnostic),
       observation('custom_agent.command_execution_policy', false, 'observed', timestamp, request.context, detailCode, diagnostic),
       observation('custom_agent.model', coreSelected && evidence.modelProjected, 'observed', timestamp, request.context, detailCode, diagnostic),
-      observation('custom_agent.subagent', coreDelegationVerified, 'verified', timestamp, request.context, detailCode, diagnostic),
-      observation('subagent.define', coreDelegationVerified, 'verified', timestamp, request.context, detailCode, diagnostic),
-      observation('subagent.invoke', coreDelegationVerified, 'verified', timestamp, request.context, detailCode, diagnostic),
+      observation('custom_agent.subagent', coreStaticDelegationVerified, 'verified', timestamp, request.context, detailCode, diagnostic),
+      observation('subagent.define', boundedClean && evidence.dynamicSubagentDefined, 'verified', timestamp, request.context, detailCode, diagnostic),
+      observation('subagent.invoke', coreSelected && (evidence.staticChildInvoked || evidence.dynamicChildInvoked), 'verified', timestamp, request.context, detailCode, diagnostic),
       observation('headless.stream_json', coreSelected, 'verified', timestamp, request.context, detailCode, diagnostic),
     ];
-    return { observations, cacheable: coreDelegationVerified, detailCode };
+    return { observations, cacheable: coreStaticDelegationVerified, detailCode };
   } finally {
     fs.rmSync(workspace, { recursive: true, force: true });
   }
@@ -158,11 +149,24 @@ function writeCanaryAgent(workspace: string, name: string, markdown: string): vo
 }
 
 function parentAgentMarkdown(): string {
-  return `---\nname: ${LIVE_CUSTOM_AGENT_PARENT_V1}\ndescription: OMA bounded live capability canary parent.\ntools:\n  - invoke_subagent\nmainAgent: true\nsubagent: false\nmodel: flash\ncommandExecutionPolicy: off\n---\n\n# System Prompt\n\nYou are a bounded OMA capability canary. Follow the user request exactly. Invoke only the explicitly named custom subagent and do not use any other tool.\n`;
+  return `---\nname: ${LIVE_CUSTOM_AGENT_PARENT_V1}\ndescription: OMA bounded live capability canary parent.\ntools:\n  - invoke_subagent\nmainAgent: true\nsubagent: false\nmodel: flash\ncommandExecutionPolicy: off\n---\n\n# System Prompt\n\nYou are a bounded OMA capability canary. Follow the user request exactly. Invoke only the pre-existing custom subagent and do not define or create subagents.\n`;
 }
 
 function childAgentMarkdown(): string {
   return `---\nname: ${LIVE_CUSTOM_AGENT_CHILD_V1}\ndescription: OMA bounded live capability canary child.\ntools: []\nmainAgent: false\nsubagent: true\nmodel: flash\ncommandExecutionPolicy: off\n---\n\n# System Prompt\n\nReply with exactly the token requested by the parent and nothing else.\n`;
+}
+
+interface StreamEvidenceV1 {
+  readonly streamValid: boolean;
+  readonly mainAgentSelected: boolean;
+  readonly modelProjected: boolean;
+  readonly invokeToolAvailable: boolean;
+  readonly defineSubagentCalled: boolean;
+  readonly dynamicSubagentDefined: boolean;
+  readonly staticChildInvoked: boolean;
+  readonly dynamicChildInvoked: boolean;
+  readonly terminalExact: boolean;
+  readonly diagnostic: string | null;
 }
 
 function parseStreamEvidence(stdout: string, expectedFinalToken: string): StreamEvidenceV1 {
@@ -194,18 +198,39 @@ function parseStreamEvidence(stdout: string, expectedFinalToken: string): Stream
     const tools = Array.isArray(init.tools)
       ? init.tools.filter((value: unknown): value is string => typeof value === 'string')
       : [];
-    const childInvoked = events.some((event) => {
-      const stepValue = event.step_update;
-      if (event.event !== 'step_update' || !plainObject(stepValue)) return false;
-      const step = stepValue;
-      const subagentInfoValue = step.subagent_info;
-      if (step.state !== 'DONE'
-        || !['subagent', 'tool'].includes(step.step_type as string)
-        || step.tool_name !== 'invoke_subagent'
-        || !plainObject(subagentInfoValue) || !Array.isArray(subagentInfoValue.subagents)) return false;
-      return subagentInfoValue.subagents.some((value: unknown) =>
-        plainObject(value) && value.type_name === LIVE_CUSTOM_AGENT_CHILD_V1);
-    });
+
+    let defineSubagentCalled = false;
+    let dynamicSubagentDefined = false;
+    let childInvoked = false;
+
+    for (const event of events) {
+      if (event.event !== 'step_update' || !plainObject(event.step_update)) continue;
+      const step = event.step_update;
+      const toolName = typeof step.tool_name === 'string'
+        ? step.tool_name
+        : (plainObject(step.tool_info) && typeof step.tool_info.name === 'string' ? step.tool_info.name : undefined);
+
+      if (toolName === 'define_subagent') {
+        defineSubagentCalled = true;
+        if (step.state === 'DONE') {
+          dynamicSubagentDefined = true;
+        }
+      }
+
+      if (['subagent', 'tool'].includes(step.step_type as string) && toolName === 'invoke_subagent' && step.state === 'DONE') {
+        const subagentInfoValue = step.subagent_info;
+        if (plainObject(subagentInfoValue) && Array.isArray(subagentInfoValue.subagents)) {
+          if (subagentInfoValue.subagents.some((value: unknown) =>
+            plainObject(value) && value.type_name === LIVE_CUSTOM_AGENT_CHILD_V1)) {
+            childInvoked = true;
+          }
+        }
+      }
+    }
+
+    const staticChildInvoked = childInvoked && !defineSubagentCalled;
+    const dynamicChildInvoked = childInvoked && defineSubagentCalled;
+
     const responseLines = typeof result.response === 'string'
       ? result.response.split(/\r?\n/u).map((line) => line.trim()).filter((line) => line !== '')
       : [];
@@ -213,14 +238,24 @@ function parseStreamEvidence(stdout: string, expectedFinalToken: string): Stream
       && (result.error === undefined || result.error === null || result.error === '')
       && responseLines.length > 0
       && responseLines.every((line) => line === expectedFinalToken);
+
+    const diagnostic = !staticChildInvoked
+      ? (defineSubagentCalled
+          ? 'Subagent was dynamically defined before invocation; does not prove static Markdown child discovery'
+          : (!childInvoked ? 'Static Markdown custom child was not invoked' : null))
+      : null;
+
     return {
       streamValid: true,
       mainAgentSelected: init.agent === LIVE_CUSTOM_AGENT_PARENT_V1,
       modelProjected: typeof init.model === 'string' && init.model.trim() !== '',
       invokeToolAvailable: tools.includes('invoke_subagent'),
-      childInvoked,
+      defineSubagentCalled,
+      dynamicSubagentDefined,
+      staticChildInvoked,
+      dynamicChildInvoked,
       terminalExact,
-      diagnostic: null,
+      diagnostic,
     };
   } catch (cause) {
     return emptyStreamEvidence(redactDiagnostic(
@@ -236,7 +271,10 @@ function emptyStreamEvidence(diagnostic: string | null): StreamEvidenceV1 {
     mainAgentSelected: false,
     modelProjected: false,
     invokeToolAvailable: false,
-    childInvoked: false,
+    defineSubagentCalled: false,
+    dynamicSubagentDefined: false,
+    staticChildInvoked: false,
+    dynamicChildInvoked: false,
     terminalExact: false,
     diagnostic,
   };
