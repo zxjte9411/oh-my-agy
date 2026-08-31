@@ -343,7 +343,9 @@ for arg in "$@"; do
 done
 token="\${prompt##*: }"
 /bin/sleep 0.05
-: > ${JSON.stringify(completionMarker)}
+if [ "$format" != "stream-json" ]; then
+  : > ${JSON.stringify(completionMarker)}
+fi
 if [ "$format" = "json" ]; then
   printf '{"conversation_id":"fixture","status":"SUCCESS","response":"%s","error":null}\\n' "$token"
 else
@@ -393,12 +395,17 @@ exit 0
       const liveCalls = fs.readFileSync(argvLog, 'utf8').split('CALL\n')
         .filter((entry) => entry.trim() !== '')
         .map((entry) => entry.trim().split('\n'));
-      expect(liveCalls).toHaveLength(3);
+      expect(liveCalls).toHaveLength(4);
       expect(liveCalls[0]).toEqual(expect.arrayContaining(['--output-format', 'json']));
       expect(liveCalls[1]).not.toContain('--output-format');
       expect(liveCalls[1]).toEqual(expect.arrayContaining(['--mode', 'accept-edits']));
       expect(liveCalls[1]).not.toContain('--sandbox');
       expect(liveCalls[2]).toEqual(expect.arrayContaining(['--mode', 'plan', '--sandbox']));
+      expect(liveCalls[3]).toEqual(expect.arrayContaining([
+        '--agent', 'oma-live-probe-main',
+        '--output-format', 'stream-json',
+        '--sandbox',
+      ]));
       for (const liveArgv of liveCalls) {
         const timeoutIndex = liveArgv.indexOf('--print-timeout');
         expect(liveArgv.slice(timeoutIndex, timeoutIndex + 2)).toEqual(['--print-timeout', '45s']);
