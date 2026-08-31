@@ -60,6 +60,7 @@ describe('Tier 2 E2E 測試 - 邊界與極端情況', () => {
     });
 
     test('TC-T2-03: 檔案無讀寫權限', async () => {
+      if (process.getuid && process.getuid() === 0) return;
       writeTodo({ status: 'idle', remainingRetries: 3, tasks: [] });
       // 設定權限為 000 (無任何權限)
       fs.chmodSync(TODO_PATH, 0o000);

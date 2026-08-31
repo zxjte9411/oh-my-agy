@@ -104,27 +104,27 @@ export async function runCustomAgentLiveCanary(
     const evidence = boundedClean
       ? parseStreamEvidence(outcome.stdout, finalToken)
       : emptyStreamEvidence(redactDiagnostic(`${outcome.stderr}\n${outcome.error ?? ''}`, 4096));
-    const baseSelected = boundedClean && evidence.streamValid
+    const coreSelected = boundedClean && evidence.streamValid
       && evidence.mainAgentSelected && evidence.invokeToolAvailable && evidence.terminalExact;
-    const fullyVerified = baseSelected && evidence.modelProjected && evidence.childInvoked;
+    const coreDelegationVerified = coreSelected && evidence.childInvoked;
     const detailCode = outcome.timedOut ? 'LIVE_CUSTOM_AGENT_TIMEOUT'
       : outcome.outputOverflow ? 'LIVE_CUSTOM_AGENT_OVERFLOW'
         : outcome.processCountOverflow ? 'LIVE_CUSTOM_AGENT_PROCESS_OVERFLOW'
           : outcome.error === 'E_PROBE_PROCESS_COUNT_UNAVAILABLE' ? 'LIVE_CUSTOM_AGENT_PROCESS_LIMIT_UNAVAILABLE'
-            : fullyVerified ? 'LIVE_CUSTOM_AGENT_VERIFIED'
-              : baseSelected ? 'LIVE_CUSTOM_AGENT_PARTIAL' : 'LIVE_CUSTOM_AGENT_MALFORMED';
-    const diagnostic = fullyVerified ? null : evidence.diagnostic;
+            : coreDelegationVerified ? 'LIVE_CUSTOM_AGENT_VERIFIED'
+              : coreSelected ? 'LIVE_CUSTOM_AGENT_PARTIAL' : 'LIVE_CUSTOM_AGENT_MALFORMED';
+    const diagnostic = coreDelegationVerified ? null : evidence.diagnostic;
     const observations: CapabilityObservationV1[] = [
-      observation('custom_agent.markdown', baseSelected, 'observed', timestamp, request.context, detailCode, diagnostic),
-      observation('custom_agent.main_agent', baseSelected, 'observed', timestamp, request.context, detailCode, diagnostic),
-      observation('custom_agent.command_execution_policy', baseSelected, 'observed', timestamp, request.context, detailCode, diagnostic),
-      observation('custom_agent.model', baseSelected && evidence.modelProjected, 'observed', timestamp, request.context, detailCode, diagnostic),
-      observation('custom_agent.subagent', baseSelected && evidence.childInvoked, 'verified', timestamp, request.context, detailCode, diagnostic),
-      observation('subagent.define', baseSelected && evidence.childInvoked, 'verified', timestamp, request.context, detailCode, diagnostic),
-      observation('subagent.invoke', baseSelected && evidence.childInvoked, 'verified', timestamp, request.context, detailCode, diagnostic),
-      observation('headless.stream_json', baseSelected, 'verified', timestamp, request.context, detailCode, diagnostic),
+      observation('custom_agent.markdown', coreSelected, 'observed', timestamp, request.context, detailCode, diagnostic),
+      observation('custom_agent.main_agent', coreSelected, 'observed', timestamp, request.context, detailCode, diagnostic),
+      observation('custom_agent.command_execution_policy', false, 'observed', timestamp, request.context, detailCode, diagnostic),
+      observation('custom_agent.model', coreSelected && evidence.modelProjected, 'observed', timestamp, request.context, detailCode, diagnostic),
+      observation('custom_agent.subagent', coreDelegationVerified, 'verified', timestamp, request.context, detailCode, diagnostic),
+      observation('subagent.define', coreDelegationVerified, 'verified', timestamp, request.context, detailCode, diagnostic),
+      observation('subagent.invoke', coreDelegationVerified, 'verified', timestamp, request.context, detailCode, diagnostic),
+      observation('headless.stream_json', coreSelected, 'verified', timestamp, request.context, detailCode, diagnostic),
     ];
-    return { observations, cacheable: fullyVerified, detailCode };
+    return { observations, cacheable: coreDelegationVerified, detailCode };
   } finally {
     fs.rmSync(workspace, { recursive: true, force: true });
   }

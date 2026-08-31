@@ -505,14 +505,24 @@ async function runWorkerRuntime(
     const heartbeat = launched.value.value.heartbeats[taskId];
     if (heartbeat === undefined) throw new Error('E_PRODUCTION_WORKER_HEARTBEAT_MISSING');
     const providerReceiptHash = worker.routeReceiptDigest;
+    const workerProcess = heartbeat.process.pid > 0 && heartbeat.process.startMarker.trim() !== ''
+      ? heartbeat.process
+      : { pid: process.pid, startMarker: heartbeat.ownerNonce };
     const boundAuthority = await store.bindWorkerAuthority(
       launched.value.revision,
       worker.claimToken,
       {
         schemaVersion: 1, taskId, claimTokenDigest: sha256(worker.claimToken),
-        generation: worker.generation, provider: 'agy_headless',
+        generation: worker.generation, provider: 'tmux_agy',
         providerProfileDigest: worker.providerProfileDigest, providerReceiptHash,
-        process: heartbeat.process,
+        process: workerProcess,
+        pane: {
+          schemaVersion: 1,
+          sessionName: worker.sessionName,
+          paneId: worker.paneId,
+          ownerNonce: heartbeat.ownerNonce,
+          workerNonce: heartbeat.workerNonce,
+        },
         state: 'claimed', transitionSequence: 0, boundAtMs: Date.now(),
       },
     );

@@ -65,8 +65,6 @@ describe('custom-agent live canary', () => {
       'custom_agent.markdown',
       'custom_agent.main_agent',
       'custom_agent.subagent',
-      'custom_agent.model',
-      'custom_agent.command_execution_policy',
       'subagent.define',
       'subagent.invoke',
       'headless.stream_json',
@@ -76,8 +74,43 @@ describe('custom-agent live canary', () => {
         source: 'live_probe',
       });
     }
+    expect(result.observations.find(({ capability }) => capability === 'custom_agent.command_execution_policy'))
+      .toMatchObject({ result: 'indeterminate', source: 'live_probe' });
     expect(result.observations.find(({ capability }) => capability === 'subagent.invoke'))
       .toMatchObject({ tier: 'verified' });
+    expect(fs.existsSync(workspace)).toBe(false);
+  });
+
+  test('proves core native agent and delegation even when init.model is missing', async () => {
+    let workspace = '';
+    const result = await runCustomAgentLiveCanary({
+      executable: '/agy',
+      context,
+      now: () => '2026-08-31T06:00:30.000Z',
+      runner: async (request) => {
+        workspace = request.cwd ?? '';
+        const finalToken = marker(valueAfter(request.argv, '--print'), 'FINAL_TOKEN');
+        return successfulStream(finalToken, true, {
+          omitInitModel: true,
+          stepType: 'subagent',
+          response: `${finalToken}\n${finalToken}\n`,
+        });
+      },
+    });
+
+    expect(result).toMatchObject({ cacheable: true, detailCode: 'LIVE_CUSTOM_AGENT_VERIFIED' });
+    expect(result.observations.find(({ capability }) => capability === 'custom_agent.markdown'))
+      .toMatchObject({ result: 'positive', source: 'live_probe' });
+    expect(result.observations.find(({ capability }) => capability === 'custom_agent.main_agent'))
+      .toMatchObject({ result: 'positive', source: 'live_probe' });
+    expect(result.observations.find(({ capability }) => capability === 'custom_agent.subagent'))
+      .toMatchObject({ result: 'positive', source: 'live_probe' });
+    expect(result.observations.find(({ capability }) => capability === 'subagent.invoke'))
+      .toMatchObject({ result: 'positive', tier: 'verified', source: 'live_probe' });
+    expect(result.observations.find(({ capability }) => capability === 'custom_agent.model'))
+      .toMatchObject({ result: 'indeterminate', source: 'live_probe' });
+    expect(result.observations.find(({ capability }) => capability === 'custom_agent.command_execution_policy'))
+      .toMatchObject({ result: 'indeterminate', source: 'live_probe' });
     expect(fs.existsSync(workspace)).toBe(false);
   });
 
@@ -123,7 +156,7 @@ describe('custom-agent live canary', () => {
       runner: async (request) => {
         workspace = request.cwd ?? '';
         const finalToken = marker(valueAfter(request.argv, '--print'), 'FINAL_TOKEN');
-        return successfulStream(finalToken, false);
+        return successfulStream(finalToken, false, { omitInitModel: true });
       },
     });
 
@@ -131,7 +164,7 @@ describe('custom-agent live canary', () => {
     expect(result.observations.find(({ capability }) => capability === 'custom_agent.markdown'))
       .toMatchObject({ result: 'positive', tier: 'observed' });
     expect(result.observations.find(({ capability }) => capability === 'custom_agent.model'))
-      .toMatchObject({ result: 'positive', tier: 'observed' });
+      .toMatchObject({ result: 'indeterminate' });
     expect(result.observations.find(({ capability }) => capability === 'custom_agent.subagent'))
       .toMatchObject({ result: 'indeterminate' });
     expect(result.observations.find(({ capability }) => capability === 'subagent.invoke'))
@@ -235,6 +268,7 @@ function successfulStream(
     stepType?: 'subagent' | 'tool';
     childTypeName?: string;
     response?: string;
+    omitInitModel?: boolean;
   },
 ) {
   const events: unknown[] = [
@@ -245,7 +279,7 @@ function successfulStream(
         cwd: '/workspace',
         tools: ['invoke_subagent'],
         permission_mode: 'request-review',
-        model: 'fixture-flash',
+        ...(options?.omitInitModel === true ? {} : { model: 'fixture-flash' }),
         agent: LIVE_CUSTOM_AGENT_PARENT_V1,
       },
     },

@@ -45,14 +45,15 @@ describe('native custom-agent live integration', () => {
         'custom_agent.markdown',
         'custom_agent.main_agent',
         'custom_agent.subagent',
-        'custom_agent.model',
-        'custom_agent.command_execution_policy',
       ]) {
         expect(capability(key)).toMatchObject({
           outcome: 'supported',
           source: 'live_probe',
         });
       }
+      expect(capability('custom_agent.command_execution_policy')).toMatchObject({
+        outcome: 'unknown',
+      });
       expect(capability('subagent.invoke')).toMatchObject({
         outcome: 'supported',
         tier: 'verified',

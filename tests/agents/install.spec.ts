@@ -19,8 +19,6 @@ const REQUIRED = [
   'custom_agent.markdown',
   'custom_agent.main_agent',
   'custom_agent.subagent',
-  'custom_agent.model',
-  'custom_agent.command_execution_policy',
 ] as const;
 
 function supportedProfile(nativeDelegation = true) {
@@ -219,6 +217,68 @@ describe('native agent installation', () => {
       });
       expect(reinstall.ok).toBe(false);
       if (!reinstall.ok) expect(reinstall.error.code).toBe('E_PROJECTION_HASH_MISMATCH');
+    } finally {
+      fs.rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test('succeeds and omits optional model and commandExecutionPolicy when they are unknown', () => {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'oma-agent-optional-'));
+    try {
+      const result = installNativeAgents({
+        scope: 'project',
+        workspaceRoot: workspace,
+        capabilityProfile: supportedProfile(true),
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      const explorer = fs.readFileSync(path.join(result.value.agentsRoot, 'explorer', 'agent.md'), 'utf8');
+      expect(explorer).not.toContain('model:');
+      expect(explorer).not.toContain('commandExecutionPolicy:');
+      expect(explorer).toContain('tools:\n  - view_file\n  - grep_search\n');
+
+      const fixer = fs.readFileSync(path.join(result.value.agentsRoot, 'fixer', 'agent.md'), 'utf8');
+      expect(fixer).not.toContain('model:');
+      expect(fixer).not.toContain('commandExecutionPolicy:');
+      expect(fixer).toContain('tools:\n  - view_file\n  - grep_search\n  - replace_file_content\n  - run_command\n');
+    } finally {
+      fs.rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test('fails install when a core structural capability is missing', () => {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'oma-agent-missing-core-'));
+    try {
+      const now = '2026-08-30T00:00:00.000Z';
+      const host: HostIdentityV1 = {
+        realpath: '/usr/local/bin/agy', binarySha256: 'a'.repeat(64), version: '1.1.11',
+        versionOutputSha256: 'b'.repeat(64), helpOutputSha256: 'c'.repeat(64), platform: 'linux', arch: 'x64',
+      };
+      const plugin: PluginIdentityV1 = {
+        status: 'absent', realpath: null, packageDigest: null, version: null, readbackDigest: null, enabled: false,
+      };
+      const observations: CapabilityObservationV1[] = [
+        {
+          capability: 'custom_agent.markdown', source: 'help', tier: 'observed', result: 'positive',
+          observedAt: now, identityDigest: hostCapabilityIdentityDigest(host, plugin), detailCode: 'T', diagnostic: null,
+        },
+        {
+          capability: 'custom_agent.main_agent', source: 'help', tier: 'observed', result: 'positive',
+          observedAt: now, identityDigest: hostCapabilityIdentityDigest(host, plugin), detailCode: 'T', diagnostic: null,
+        },
+      ];
+      const profile = assembleHostCapabilityProfile({
+        evaluationTimestamp: now, hostIdentityBefore: host, hostIdentityAfter: host,
+        pluginIdentityBefore: plugin, pluginIdentityAfter: plugin, observations,
+      });
+      const result = installNativeAgents({
+        scope: 'project', workspaceRoot: workspace, capabilityProfile: profile,
+      });
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe('E_CAPABILITY_UNPROVEN');
+        expect(result.error.message).toContain('custom_agent.subagent');
+      }
     } finally {
       fs.rmSync(workspace, { recursive: true, force: true });
     }
