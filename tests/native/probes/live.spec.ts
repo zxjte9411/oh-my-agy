@@ -48,6 +48,63 @@ describe('explicit live probe', () => {
       }),
     ]));
   });
+
+  it('lets positive live evidence supersede only structured field unavailability for the same capability', () => {
+    const coverage = completeLiveCapabilityProbeCoverage([
+      {
+        capability: 'custom_agent.markdown',
+        source: 'structured_init',
+        tier: 'observed',
+        result: 'indeterminate',
+        observedAt: context.evaluationTimestamp,
+        identityDigest: context.identityDigest,
+        detailCode: 'STRUCTURED_INIT_FIELD_UNAVAILABLE',
+        diagnostic: null,
+      },
+      {
+        capability: 'custom_agent.markdown',
+        source: 'live_probe',
+        tier: 'observed',
+        result: 'positive',
+        observedAt: context.evaluationTimestamp,
+        identityDigest: context.identityDigest,
+        detailCode: 'LIVE_CUSTOM_AGENT_VERIFIED',
+        diagnostic: null,
+      },
+      {
+        capability: 'custom_agent.model',
+        source: 'structured_init',
+        tier: 'observed',
+        result: 'indeterminate',
+        observedAt: context.evaluationTimestamp,
+        identityDigest: context.identityDigest,
+        detailCode: 'STRUCTURED_INIT_FIELD_UNAVAILABLE',
+        diagnostic: null,
+      },
+    ], context);
+
+    expect(coverage).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        capability: 'custom_agent.markdown',
+        source: 'live_probe',
+        result: 'positive',
+      }),
+      expect.objectContaining({
+        capability: 'custom_agent.model',
+        source: 'structured_init',
+        result: 'indeterminate',
+        detailCode: 'STRUCTURED_INIT_FIELD_UNAVAILABLE',
+      }),
+    ]));
+    expect(coverage).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        capability: 'custom_agent.markdown',
+        source: 'structured_init',
+        detailCode: 'STRUCTURED_INIT_FIELD_UNAVAILABLE',
+      }),
+    ]));
+  });
+
   it('requires explicit opt-in and preserves malformed/timeout as indeterminate', async () => {
     await expect(runExplicitLiveProbe({ live: false, executable: '/agy', argv: [], capability: 'headless.print', expectedToken: 'ok', context })).rejects.toThrow(/OPT_IN/);
     const malformed = await runExplicitLiveProbe({ live: true, executable: '/agy', argv: [], capability: 'headless.print', expectedToken: 'ok', context, runner: async () => ({ status: 0, signal: null, stdout: 'deceptive', stderr: '', timedOut: false, outputOverflow: false, processCountOverflow: false }) });
