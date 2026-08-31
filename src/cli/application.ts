@@ -36,6 +36,7 @@ Usage:
   oma agents list [--json]
   oma agents inspect <role> [--json]
   oma agents install --scope project|user [--json]
+  oma agents uninstall --scope project|user [--json]
   oma agents doctor [--scope project|user] [--json]
   oma workflow install [--source <definition.json>]
   oma workflow list|native-status

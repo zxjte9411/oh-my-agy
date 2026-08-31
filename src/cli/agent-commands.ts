@@ -23,6 +23,7 @@ export type AgentCliCommandV1 =
   | { readonly kind: 'list'; readonly asJson: boolean }
   | { readonly kind: 'inspect'; readonly role: string; readonly asJson: boolean }
   | { readonly kind: 'install'; readonly scope: AgentInstallScopeV1; readonly asJson: boolean }
+  | { readonly kind: 'uninstall'; readonly scope: AgentInstallScopeV1; readonly asJson: boolean }
   | { readonly kind: 'doctor'; readonly scope: AgentInstallScopeV1; readonly asJson: boolean }
   | { readonly kind: 'mcp-server' };
 
@@ -58,6 +59,11 @@ export function parseAgentCommand(argv: readonly string[]): Result<AgentCliComma
     if (!parsed.ok) return parsed;
     return ok({ kind: 'install', scope: parsed.value.scope, asJson: parsed.value.asJson });
   }
+  if (subcommand === 'uninstall') {
+    const parsed = parseScopedOptions(argv.slice(1), true);
+    if (!parsed.ok) return parsed;
+    return ok({ kind: 'uninstall', scope: parsed.value.scope, asJson: parsed.value.asJson });
+  }
   if (subcommand === 'doctor') {
     const parsed = parseScopedOptions(argv.slice(1), false);
     if (!parsed.ok) return parsed;
@@ -67,7 +73,7 @@ export function parseAgentCommand(argv: readonly string[]): Result<AgentCliComma
     if (argv.length !== 1) return usage('agents mcp-server accepts no arguments');
     return ok({ kind: 'mcp-server' });
   }
-  return usage('agents command must be one of: list, inspect, install, doctor, mcp-server');
+  return usage('agents command must be one of: list, inspect, install, uninstall, doctor, mcp-server');
 }
 
 export async function runAgentCommand(
@@ -160,6 +166,31 @@ export async function runAgentCommand(
       dependencies.stdout('Open /agents in Antigravity to verify discovery.\n');
     }
     return 0;
+  }
+
+  if (command.kind === 'uninstall') {
+    const { uninstallNativeAgents } = await import('../agents/install');
+    const uninstalled = uninstallNativeAgents({
+      scope: command.scope,
+      workspaceRoot: dependencies.workspaceRoot,
+      homeDir: dependencies.homeDir,
+    });
+    if (!uninstalled.ok) {
+      dependencies.stderr(formatCliError(uninstalled.error.code, uninstalled.error.message));
+      return 1;
+    }
+    if (command.asJson) {
+      dependencies.stdout(`${JSON.stringify({
+        schema: 'oma.agents-uninstall/v1',
+        ok: uninstalled.value.collisions.length === 0,
+        ...uninstalled.value,
+      }, null, 2)}\n`);
+    } else {
+      dependencies.stdout(`oma agents uninstall: ${uninstalled.value.status}\n`);
+      for (const item of uninstalled.value.removed) dependencies.stdout(`- removed ${item}\n`);
+      for (const item of uninstalled.value.collisions) dependencies.stdout(`- collision ${item}\n`);
+    }
+    return uninstalled.value.collisions.length === 0 ? 0 : 1;
   }
 
   const report = doctorNativeAgentInstallation({

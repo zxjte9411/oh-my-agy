@@ -3,7 +3,7 @@ import { err } from '../../src/runtime/types';
 import { runtimeError } from '../../src/runtime/errors';
 
 describe('oma agents command contract', () => {
-  test('parses list, inspect, install, doctor and private mcp-server', () => {
+  test('parses list, inspect, install, uninstall, doctor and private mcp-server', () => {
     expect(parseAgentCommand(['list'])).toEqual({ ok: true, value: { kind: 'list', asJson: false } });
     expect(parseAgentCommand(['inspect', 'critic', '--json'])).toEqual({
       ok: true,
@@ -12,6 +12,10 @@ describe('oma agents command contract', () => {
     expect(parseAgentCommand(['install', '--scope', 'user'])).toEqual({
       ok: true,
       value: { kind: 'install', scope: 'user', asJson: false },
+    });
+    expect(parseAgentCommand(['uninstall', '--scope', 'user'])).toEqual({
+      ok: true,
+      value: { kind: 'uninstall', scope: 'user', asJson: false },
     });
     expect(parseAgentCommand(['doctor'])).toEqual({
       ok: true,
