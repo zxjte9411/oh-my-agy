@@ -65,7 +65,6 @@ describe('custom-agent live canary', () => {
       'custom_agent.markdown',
       'custom_agent.main_agent',
       'custom_agent.subagent',
-      'subagent.define',
       'subagent.invoke',
       'headless.stream_json',
     ]) {
@@ -74,6 +73,8 @@ describe('custom-agent live canary', () => {
         source: 'live_probe',
       });
     }
+    expect(result.observations.find(({ capability }) => capability === 'subagent.define'))
+      .toMatchObject({ result: 'indeterminate', source: 'live_probe' });
     expect(result.observations.find(({ capability }) => capability === 'custom_agent.command_execution_policy'))
       .toMatchObject({ result: 'indeterminate', source: 'live_probe' });
     expect(result.observations.find(({ capability }) => capability === 'subagent.invoke'))
@@ -233,7 +234,7 @@ describe('custom-agent live canary', () => {
       },
     });
 
-    expect(result).toMatchObject({ cacheable: false, detailCode: 'LIVE_CUSTOM_AGENT_MALFORMED' });
+    expect(result).toMatchObject({ cacheable: false, detailCode: 'LIVE_CUSTOM_AGENT_PARTIAL' });
     expect(result.observations.find(({ capability }) => capability === 'subagent.invoke'))
       .toMatchObject({ result: 'indeterminate' });
     expect(fs.existsSync(workspace)).toBe(false);
@@ -259,6 +260,33 @@ describe('custom-agent live canary', () => {
       .toMatchObject({ result: 'indeterminate' });
     expect(fs.existsSync(workspace)).toBe(false);
   });
+
+  test('rejects static Markdown-child verification if define_subagent step occurs before invoke_subagent', async () => {
+    let workspace = '';
+    const result = await runCustomAgentLiveCanary({
+      executable: '/agy',
+      context,
+      now: () => '2026-08-31T06:00:30.000Z',
+      runner: async (request) => {
+        workspace = request.cwd ?? '';
+        const finalToken = marker(valueAfter(request.argv, '--print'), 'FINAL_TOKEN');
+        return successfulStream(finalToken, true, {
+          includeDefineSubagent: true,
+        });
+      },
+    });
+
+    expect(result).toMatchObject({ cacheable: false, detailCode: 'LIVE_CUSTOM_AGENT_PARTIAL' });
+    // custom_agent.subagent must NOT be verified because define_subagent was used
+    expect(result.observations.find(({ capability }) => capability === 'custom_agent.subagent'))
+      .toMatchObject({ result: 'indeterminate' });
+    // subagent.define and subagent.invoke can be positive
+    expect(result.observations.find(({ capability }) => capability === 'subagent.define'))
+      .toMatchObject({ result: 'positive', tier: 'verified' });
+    expect(result.observations.find(({ capability }) => capability === 'subagent.invoke'))
+      .toMatchObject({ result: 'positive', tier: 'verified' });
+    expect(fs.existsSync(workspace)).toBe(false);
+  });
 });
 
 function successfulStream(
@@ -269,6 +297,7 @@ function successfulStream(
     childTypeName?: string;
     response?: string;
     omitInitModel?: boolean;
+    includeDefineSubagent?: boolean;
   },
 ) {
   const events: unknown[] = [
@@ -284,12 +313,30 @@ function successfulStream(
       },
     },
   ];
-  if (includeChild) {
+  if (options?.includeDefineSubagent === true) {
     events.push({
       event: 'step_update',
       step_update: {
         conversation_id: 'fixture-stream',
         step_index: 1,
+        state: 'DONE',
+        step_type: 'tool',
+        tool_name: 'define_subagent',
+        tool_info: {
+          name: 'define_subagent',
+          parameters: {
+            name: LIVE_CUSTOM_AGENT_CHILD_V1,
+          },
+        },
+      },
+    });
+  }
+  if (includeChild) {
+    events.push({
+      event: 'step_update',
+      step_update: {
+        conversation_id: 'fixture-stream',
+        step_index: options?.includeDefineSubagent === true ? 2 : 1,
         state: 'DONE',
         step_type: options?.stepType ?? 'tool',
         tool_name: 'invoke_subagent',

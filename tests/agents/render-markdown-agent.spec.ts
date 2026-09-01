@@ -66,9 +66,7 @@ describe('native Markdown agent rendering', () => {
     ]);
     expect(orchestrator.omaMcpConfigured).toBe(true);
     expect(orchestrator.markdown).toContain('  - invoke_subagent');
-    expect(orchestrator.markdown).toContain('mcpServers:\n  oh-my-agy-agents:\n    command: oma');
-    expect(orchestrator.markdown).toContain('      - agents\n      - mcp-server');
-    expect(orchestrator.markdown).not.toContain('inheritMcp');
+    expect(orchestrator.markdown).not.toContain('mcpServers:');
     expect(orchestrator.markdown).toContain('delegation.plan');
     expect(orchestrator.markdown).toContain('workspace: inherit');
 

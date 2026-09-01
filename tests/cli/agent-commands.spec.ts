@@ -3,7 +3,7 @@ import { err } from '../../src/runtime/types';
 import { runtimeError } from '../../src/runtime/errors';
 
 describe('oma agents command contract', () => {
-  test('parses list, inspect, install, doctor and private mcp-server', () => {
+  test('parses list, inspect, install, uninstall, doctor and private mcp-server', () => {
     expect(parseAgentCommand(['list'])).toEqual({ ok: true, value: { kind: 'list', asJson: false } });
     expect(parseAgentCommand(['inspect', 'critic', '--json'])).toEqual({
       ok: true,
@@ -12,6 +12,10 @@ describe('oma agents command contract', () => {
     expect(parseAgentCommand(['install', '--scope', 'user'])).toEqual({
       ok: true,
       value: { kind: 'install', scope: 'user', asJson: false },
+    });
+    expect(parseAgentCommand(['uninstall', '--scope', 'user'])).toEqual({
+      ok: true,
+      value: { kind: 'uninstall', scope: 'user', asJson: false },
     });
     expect(parseAgentCommand(['doctor'])).toEqual({
       ok: true,
@@ -99,5 +103,107 @@ describe('oma agents command contract', () => {
     });
     expect(code).toBe(1);
     expect(stderr).toContain('E_CAPABILITY_UNPROVEN');
+  });
+
+  test('reports remediation clearly in text and JSON output when delegation is unavailable on existing install', async () => {
+    const os = await import('os');
+    const fs = await import('fs');
+    const path = await import('path');
+    const { assembleHostCapabilityProfile, hostCapabilityIdentityDigest } = await import('../../src/native/capability-profile');
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'oma-cli-agent-'));
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'oma-cli-agent-home-'));
+
+    const host = {
+      realpath: '/usr/local/bin/agy',
+      binarySha256: 'a'.repeat(64),
+      version: '1.1.11',
+      versionOutputSha256: 'b'.repeat(64),
+      helpOutputSha256: 'c'.repeat(64),
+      platform: 'linux' as const,
+      arch: 'x64',
+    };
+    const plugin = {
+      status: 'absent' as const,
+      realpath: null,
+      packageDigest: null,
+      version: null,
+      readbackDigest: null,
+      enabled: false,
+    };
+    const identityDigest = hostCapabilityIdentityDigest(host, plugin);
+
+    const makeProfile = (delegation: boolean) => assembleHostCapabilityProfile({
+      evaluationTimestamp: '2026-08-31T00:00:00.000Z',
+      hostIdentityBefore: host,
+      hostIdentityAfter: host,
+      pluginIdentityBefore: plugin,
+      pluginIdentityAfter: plugin,
+      observations: [
+        { capability: 'custom_agent.markdown', source: 'help', tier: 'observed', result: 'positive', observedAt: '2026-08-31T00:00:00.000Z', identityDigest, detailCode: 'T', diagnostic: null },
+        { capability: 'custom_agent.main_agent', source: 'help', tier: 'observed', result: 'positive', observedAt: '2026-08-31T00:00:00.000Z', identityDigest, detailCode: 'T', diagnostic: null },
+        ...(delegation ? [
+          { capability: 'custom_agent.subagent', source: 'live_probe' as const, tier: 'verified' as const, result: 'positive' as const, observedAt: '2026-08-31T00:00:00.000Z', identityDigest, detailCode: 'T', diagnostic: null },
+          { capability: 'subagent.invoke', source: 'live_probe' as const, tier: 'verified' as const, result: 'positive' as const, observedAt: '2026-08-31T00:00:00.000Z', identityDigest, detailCode: 'T', diagnostic: null },
+        ] : []),
+      ],
+    });
+
+    try {
+      // 1. First install with delegation
+      const firstCommand = parseAgentCommand(['install', '--scope', 'user']);
+      expect(firstCommand.ok).toBe(true);
+      if (!firstCommand.ok) return;
+      let stdout = '';
+      let stderr = '';
+      const code1 = await runAgentCommand(firstCommand.value, {
+        workspaceRoot: workspace,
+        homeDir: home,
+        loadCapabilityProfile: async () => ({ ok: true, value: makeProfile(true) }),
+        stdout: (val) => { stdout += val; },
+        stderr: (val) => { stderr += val; },
+      });
+      expect(code1).toBe(0);
+      expect(stdout).toContain('installed 7 canonical agents');
+
+      // 2. Remediate in text mode
+      stdout = '';
+      stderr = '';
+      const code2 = await runAgentCommand(firstCommand.value, {
+        workspaceRoot: workspace,
+        homeDir: home,
+        loadCapabilityProfile: async () => ({ ok: true, value: makeProfile(false) }),
+        stdout: (val) => { stdout += val; },
+        stderr: (val) => { stderr += val; },
+      });
+      expect(code2).toBe(0);
+      expect(stdout).toContain('remediated (native delegation unavailable) 7 canonical agents');
+      expect(stdout).not.toContain('installed 7 canonical agents');
+
+      // 3. Remediate in JSON mode on rerun
+      const jsonCommand = parseAgentCommand(['install', '--scope', 'user', '--json']);
+      expect(jsonCommand.ok).toBe(true);
+      if (!jsonCommand.ok) return;
+      stdout = '';
+      stderr = '';
+      const code3 = await runAgentCommand(jsonCommand.value, {
+        workspaceRoot: workspace,
+        homeDir: home,
+        loadCapabilityProfile: async () => ({ ok: true, value: makeProfile(false) }),
+        stdout: (val) => { stdout += val; },
+        stderr: (val) => { stderr += val; },
+      });
+      expect(code3).toBe(0);
+      const json = JSON.parse(stdout);
+      expect(json).toMatchObject({
+        schema: 'oma.agents-install/v1',
+        ok: true,
+        idempotent: true,
+        remediated: false,
+        delegation: { status: 'unavailable' },
+      });
+    } finally {
+      fs.rmSync(workspace, { recursive: true, force: true });
+      fs.rmSync(home, { recursive: true, force: true });
+    }
   });
 });
