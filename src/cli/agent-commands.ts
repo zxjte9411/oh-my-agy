@@ -162,7 +162,12 @@ export async function runAgentCommand(
         ...installed.value,
       }, null, 2)}\n`);
     } else {
-      dependencies.stdout(`${installed.value.idempotent ? 'verified existing' : 'installed'} ${CANONICAL_AGENT_IDS_V1.length} canonical agents at ${installed.value.agentsRoot}\n`);
+      const verb = installed.value.remediated
+        ? 'remediated (native delegation unavailable)'
+        : installed.value.idempotent
+          ? 'verified existing'
+          : 'installed';
+      dependencies.stdout(`${verb} ${CANONICAL_AGENT_IDS_V1.length} canonical agents at ${installed.value.agentsRoot}\n`);
       dependencies.stdout('Open /agents in Antigravity to verify discovery.\n');
     }
     return 0;

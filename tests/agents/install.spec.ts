@@ -127,30 +127,144 @@ describe('native agent installation', () => {
     }
   });
 
-  test('installs non-delegating agents but reports unsupported when native invoke is unproven', () => {
+  test('fresh install fails closed when native delegation is unproven and leaves no files', () => {
     const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'oma-agent-no-delegation-'));
     try {
       const installed = installNativeAgents({
         scope: 'project', workspaceRoot: workspace, capabilityProfile: supportedProfile(false),
       });
-      expect(installed.ok).toBe(true);
-      if (!installed.ok) return;
-      expect(installed.value.delegation.status).toBe('unavailable');
-      const orchestrator = fs.readFileSync(
-        path.join(installed.value.agentsRoot, 'orchestrator', 'agent.md'),
-        'utf8',
-      );
-      expect(orchestrator).not.toContain('invoke_subagent');
-      expect(orchestrator).not.toContain('mcpServers:');
-      expect(orchestrator).not.toContain('delegation.plan');
-      const doctor = doctorNativeAgentInstallation({
-        scope: 'project', workspaceRoot: workspace, capabilityProfile: supportedProfile(false),
-      });
-      expect(doctor.status).toBe('unsupported');
-      expect(doctor.exitCode).toBe(1);
-      expect(doctor.delegation.diagnostic).toContain('subagent.invoke');
+      expect(installed.ok).toBe(false);
+      if (!installed.ok) {
+        expect(installed.error.code).toBe('E_CAPABILITY_UNPROVEN');
+        expect(installed.error.message).toContain('delegation is unavailable');
+      }
+      expect(fs.existsSync(path.join(workspace, '.agents'))).toBe(false);
     } finally {
       fs.rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test('existing valid OMA install safely remediates when delegation becomes unavailable and can upgrade back', () => {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'oma-remediation-ws-'));
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'oma-remediation-home-'));
+    try {
+      const mcpConfigDir = path.join(home, '.gemini', 'config');
+      const mcpConfigPath = path.join(mcpConfigDir, 'mcp_config.json');
+      fs.mkdirSync(mcpConfigDir, { recursive: true });
+      fs.writeFileSync(mcpConfigPath, JSON.stringify({
+        mcpServers: {
+          foreign_server: { command: 'node', args: ['foreign.js'] },
+        },
+      }, null, 2), 'utf8');
+
+      // 1. Initial valid install with full delegation
+      const first = installNativeAgents({
+        scope: 'user', workspaceRoot: workspace, homeDir: home, capabilityProfile: supportedProfile(true),
+      });
+      expect(first.ok).toBe(true);
+      if (!first.ok) return;
+      expect(first.value.delegation.status).toBe('available');
+      expect(first.value.remediated).toBe(false);
+      const orchestratorFull = fs.readFileSync(path.join(first.value.agentsRoot, 'orchestrator', 'agent.md'), 'utf8');
+      expect(orchestratorFull).toContain('invoke_subagent');
+      expect(orchestratorFull).toContain('delegation.plan');
+      const mcpWithOma = JSON.parse(fs.readFileSync(mcpConfigPath, 'utf8'));
+      expect(mcpWithOma.mcpServers['oh-my-agy-agents']).toBeDefined();
+      expect(mcpWithOma.mcpServers['foreign_server']).toBeDefined();
+
+      // 2. Delegation becomes unavailable -> safe remediation transaction
+      const remediation = installNativeAgents({
+        scope: 'user', workspaceRoot: workspace, homeDir: home, capabilityProfile: supportedProfile(false),
+      });
+      expect(remediation.ok).toBe(true);
+      if (!remediation.ok) return;
+      expect(remediation.value.remediated).toBe(true);
+      expect(remediation.value.idempotent).toBe(false);
+      expect(remediation.value.delegation.status).toBe('unavailable');
+      expect(remediation.value.mcpConfigPath).toBeNull();
+      const orchestratorBase = fs.readFileSync(path.join(remediation.value.agentsRoot, 'orchestrator', 'agent.md'), 'utf8');
+      expect(orchestratorBase).not.toContain('invoke_subagent');
+      expect(orchestratorBase).not.toContain('delegation.plan');
+      // OMA MCP server removed, foreign preserved
+      const mcpRemediated = JSON.parse(fs.readFileSync(mcpConfigPath, 'utf8'));
+      expect(mcpRemediated.mcpServers['oh-my-agy-agents']).toBeUndefined();
+      expect(mcpRemediated.mcpServers['foreign_server']).toBeDefined();
+      const doctorRemediated = doctorNativeAgentInstallation({
+        scope: 'user', workspaceRoot: workspace, homeDir: home, capabilityProfile: supportedProfile(false),
+      });
+      expect(doctorRemediated.status).toBe('unsupported');
+      expect(doctorRemediated.exitCode).toBe(1);
+
+      // 3. Rerun under unavailable delegation is idempotent
+      const rerun = installNativeAgents({
+        scope: 'user', workspaceRoot: workspace, homeDir: home, capabilityProfile: supportedProfile(false),
+      });
+      expect(rerun.ok).toBe(true);
+      if (rerun.ok) {
+        expect(rerun.value.idempotent).toBe(true);
+        expect(rerun.value.remediated).toBe(false);
+      }
+
+      // 4. Delegation becomes available again -> upgrades back to full orchestrator + owned MCP
+      const upgrade = installNativeAgents({
+        scope: 'user', workspaceRoot: workspace, homeDir: home, capabilityProfile: supportedProfile(true),
+      });
+      expect(upgrade.ok).toBe(true);
+      if (!upgrade.ok) return;
+      expect(upgrade.value.idempotent).toBe(false);
+      expect(upgrade.value.remediated).toBe(false);
+      expect(upgrade.value.delegation.status).toBe('available');
+      const orchestratorUpgraded = fs.readFileSync(path.join(upgrade.value.agentsRoot, 'orchestrator', 'agent.md'), 'utf8');
+      expect(orchestratorUpgraded).toContain('invoke_subagent');
+      expect(orchestratorUpgraded).toContain('delegation.plan');
+      const mcpUpgraded = JSON.parse(fs.readFileSync(mcpConfigPath, 'utf8'));
+      expect(mcpUpgraded.mcpServers['oh-my-agy-agents']).toBeDefined();
+      expect(mcpUpgraded.mcpServers['foreign_server']).toBeDefined();
+      const doctorUpgraded = doctorNativeAgentInstallation({
+        scope: 'user', workspaceRoot: workspace, homeDir: home, capabilityProfile: supportedProfile(true),
+      });
+      expect(doctorUpgraded.status).toBe('healthy');
+      expect(doctorUpgraded.exitCode).toBe(0);
+    } finally {
+      fs.rmSync(workspace, { recursive: true, force: true });
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test('remediation preserves drifted/foreign same-name MCP entry per ownership contract', () => {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'oma-remediation-drift-ws-'));
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'oma-remediation-drift-home-'));
+    try {
+      const mcpConfigDir = path.join(home, '.gemini', 'config');
+      const mcpConfigPath = path.join(mcpConfigDir, 'mcp_config.json');
+      fs.mkdirSync(mcpConfigDir, { recursive: true });
+
+      // Install with delegation
+      const first = installNativeAgents({
+        scope: 'user', workspaceRoot: workspace, homeDir: home, capabilityProfile: supportedProfile(true),
+      });
+      expect(first.ok).toBe(true);
+
+      // User customizes oh-my-agy-agents entry
+      fs.writeFileSync(mcpConfigPath, JSON.stringify({
+        mcpServers: {
+          'oh-my-agy-agents': { command: 'custom-wrapper', args: ['run'] },
+        },
+      }, null, 2), 'utf8');
+
+      // Remediate -> does not delete user modified entry
+      const remediation = installNativeAgents({
+        scope: 'user', workspaceRoot: workspace, homeDir: home, capabilityProfile: supportedProfile(false),
+      });
+      expect(remediation.ok).toBe(true);
+      const mcpAfter = JSON.parse(fs.readFileSync(mcpConfigPath, 'utf8'));
+      expect(mcpAfter.mcpServers['oh-my-agy-agents']).toEqual({
+        command: 'custom-wrapper',
+        args: ['run'],
+      });
+    } finally {
+      fs.rmSync(workspace, { recursive: true, force: true });
+      fs.rmSync(home, { recursive: true, force: true });
     }
   });
 
@@ -829,15 +943,21 @@ describe('native agent installation', () => {
         },
       }), 'utf8');
 
-      // Install with delegation unavailable
-      const installed = installNativeAgents({
+      // 1. Fresh install with delegation
+      const first = installNativeAgents({
+        scope: 'user', workspaceRoot: workspace, homeDir: home, capabilityProfile: supportedProfile(true),
+      });
+      expect(first.ok).toBe(true);
+
+      // 2. Remediate -> receipt.mcpServer becomes null
+      const remediated = installNativeAgents({
         scope: 'user', workspaceRoot: workspace, homeDir: home, capabilityProfile: supportedProfile(false),
       });
-      expect(installed.ok).toBe(true);
-      if (!installed.ok) return;
-      expect(installed.value.receipt.mcpServer).toBeNull();
+      expect(remediated.ok).toBe(true);
+      if (!remediated.ok) return;
+      expect(remediated.value.receipt.mcpServer).toBeNull();
 
-      // Now pre-seed a canonical entry as if user or other tool created it
+      // Now pre-seed an unowned canonical entry as if user or other tool created it
       fs.writeFileSync(mcpConfigPath, JSON.stringify({
         mcpServers: {
           'foreign-server': initialEntry,
