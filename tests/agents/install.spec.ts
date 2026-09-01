@@ -12,8 +12,12 @@ import {
   doctorNativeAgentInstallation,
   installNativeAgents,
   resolveNativeAgentRoot,
+  CANONICAL_OMA_MCP_SERVER_ENTRY,
 } from '../../src/agents/install';
 import { CANONICAL_AGENT_IDS_V1 } from '../../src/agents/types';
+import { sha256 } from '../../src/runtime/atomic';
+import { canonicalBytesV1 } from '../../src/contracts/state-schemas';
+import { renderAllCanonicalAgents } from '../../src/agents/render-markdown-agent';
 
 const REQUIRED = [
   'custom_agent.markdown',
@@ -84,14 +88,16 @@ function supportedProfile(nativeDelegation = true) {
 
 describe('native agent installation', () => {
   test('installs capability-proven orchestrator delegation and is idempotent by ownership receipt', () => {
-    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'oma-agent-project-'));
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'oma-agent-user-'));
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'oma-agent-home-'));
     try {
       const first = installNativeAgents({
-        scope: 'project',
+        scope: 'user',
         workspaceRoot: workspace,
-        capabilityProfile: supportedProfile(),
+        homeDir: home,
+        capabilityProfile: supportedProfile(true),
         now: () => new Date('2026-08-30T01:00:00.000Z'),
-        idFactory: () => 'tx-project',
+        idFactory: () => 'tx-user',
       });
       expect(first.ok).toBe(true);
       if (!first.ok) return;
@@ -106,22 +112,47 @@ describe('native agent installation', () => {
       );
       expect(orchestrator).toContain('  - invoke_subagent');
       expect(orchestrator).not.toContain('mcpServers:');
-      expect(first.value.mcpConfigPath).toBeNull();
+      expect(first.value.mcpConfigPath).toBe(path.join(home, '.gemini', 'config', 'mcp_config.json'));
       expect(orchestrator).toContain('delegation.plan');
       expect(orchestrator).toContain('delegation.reconcile');
       expect(fs.existsSync(path.join(first.value.agentsRoot, 'reviewer'))).toBe(false);
       expect(fs.existsSync(first.value.receiptPath)).toBe(true);
 
       const second = installNativeAgents({
-        scope: 'project', workspaceRoot: workspace, capabilityProfile: supportedProfile(),
+        scope: 'user', workspaceRoot: workspace, homeDir: home, capabilityProfile: supportedProfile(true),
       });
       expect(second.ok).toBe(true);
       if (second.ok) expect(second.value.idempotent).toBe(true);
       const doctor = doctorNativeAgentInstallation({
-        scope: 'project', workspaceRoot: workspace, capabilityProfile: supportedProfile(),
+        scope: 'user', workspaceRoot: workspace, homeDir: home, capabilityProfile: supportedProfile(true),
       });
       expect(doctor.status).toBe('healthy');
       expect(doctor.delegation.status).toBe('available');
+    } finally {
+      fs.rmSync(workspace, { recursive: true, force: true });
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test('fresh install for project scope fails closed because project MCP binding is unproven', () => {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'oma-agent-project-mcp-'));
+    try {
+      const installed = installNativeAgents({
+        scope: 'project', workspaceRoot: workspace, capabilityProfile: supportedProfile(true),
+      });
+      expect(installed.ok).toBe(false);
+      if (!installed.ok) {
+        expect(installed.error.code).toBe('E_CAPABILITY_UNPROVEN');
+        expect(installed.error.message).toContain('project-scope MCP binding is unproven');
+      }
+      expect(fs.existsSync(path.join(workspace, '.agents'))).toBe(false);
+
+      const doctor = doctorNativeAgentInstallation({
+        scope: 'project', workspaceRoot: workspace, capabilityProfile: supportedProfile(true),
+      });
+      expect(doctor.status).toBe('missing');
+      expect(doctor.delegation.status).toBe('unavailable');
+      expect(doctor.delegation.diagnostic).toContain('project-scope MCP binding is unproven');
     } finally {
       fs.rmSync(workspace, { recursive: true, force: true });
     }
@@ -129,18 +160,20 @@ describe('native agent installation', () => {
 
   test('fresh install fails closed when native delegation is unproven and leaves no files', () => {
     const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'oma-agent-no-delegation-'));
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'oma-agent-no-del-home-'));
     try {
       const installed = installNativeAgents({
-        scope: 'project', workspaceRoot: workspace, capabilityProfile: supportedProfile(false),
+        scope: 'user', workspaceRoot: workspace, homeDir: home, capabilityProfile: supportedProfile(false),
       });
       expect(installed.ok).toBe(false);
       if (!installed.ok) {
         expect(installed.error.code).toBe('E_CAPABILITY_UNPROVEN');
         expect(installed.error.message).toContain('delegation is unavailable');
       }
-      expect(fs.existsSync(path.join(workspace, '.agents'))).toBe(false);
+      expect(fs.existsSync(path.join(home, '.gemini', 'config', 'agents'))).toBe(false);
     } finally {
       fs.rmSync(workspace, { recursive: true, force: true });
+      fs.rmSync(home, { recursive: true, force: true });
     }
   });
 
@@ -268,6 +301,102 @@ describe('native agent installation', () => {
     }
   });
 
+  test('P1-H2: existing install with no MCP receipt remediates posture when delegation becomes unavailable', () => {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'oma-p1h2-ws-'));
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'oma-p1h2-home-'));
+    try {
+      const agentsRoot = resolveNativeAgentRoot('user', workspace, home);
+      fs.mkdirSync(agentsRoot, { recursive: true });
+      const renderOptions = { nativeDelegationAvailable: true, modelProjectionAvailable: false, commandExecutionPolicyAvailable: false };
+      const agents = renderAllCanonicalAgents(renderOptions);
+      for (const agent of agents) {
+        const agentDir = path.join(agentsRoot, agent.id);
+        fs.mkdirSync(agentDir, { recursive: true });
+        fs.writeFileSync(path.join(agentDir, 'agent.md'), agent.markdown, 'utf8');
+      }
+      const files = agents.map((agent: any) => ({
+        id: agent.id,
+        path: `${agent.id}/agent.md`,
+        sha256: sha256(agent.markdown),
+      }));
+      const receiptDir = path.join(agentsRoot, '.oma');
+      fs.mkdirSync(receiptDir, { recursive: true });
+      const receiptPath = path.join(receiptDir, 'receipt.json');
+      const baseReceipt = {
+        schema: 'oma.agent-install-receipt/v1' as const,
+        scope: 'user' as const,
+        transactionId: 'tx-seed',
+        installedAt: '2026-08-30T00:00:00.000Z',
+        files,
+        mcpConfigPath: null,
+        mcpServer: null,
+      };
+      const seededReceipt = { ...baseReceipt, receiptDigest: sha256(canonicalBytesV1(baseReceipt)) };
+      fs.writeFileSync(receiptPath, JSON.stringify(seededReceipt, null, 2), 'utf8');
+
+      // Now run installNativeAgents when delegation is unavailable
+      const remediation = installNativeAgents({
+        scope: 'user', workspaceRoot: workspace, homeDir: home, capabilityProfile: supportedProfile(false),
+      });
+      expect(remediation.ok).toBe(true);
+      if (!remediation.ok) return;
+      expect(remediation.value.remediated).toBe(true);
+      expect(remediation.value.idempotent).toBe(false);
+      expect(remediation.value.delegation.status).toBe('unavailable');
+
+      const orchestrator = fs.readFileSync(path.join(agentsRoot, 'orchestrator', 'agent.md'), 'utf8');
+      expect(orchestrator).not.toContain('invoke_subagent');
+      expect(orchestrator).not.toContain('delegation.plan');
+    } finally {
+      fs.rmSync(workspace, { recursive: true, force: true });
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test('P0-H3: remediated/no-MCP receipt refuses silent adoption of exact-canonical foreign MCP entry when delegation is restored', () => {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'oma-p0h3-ws-'));
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'oma-p0h3-home-'));
+    try {
+      const mcpConfigDir = path.join(home, '.gemini', 'config');
+      const mcpConfigPath = path.join(mcpConfigDir, 'mcp_config.json');
+      fs.mkdirSync(mcpConfigDir, { recursive: true });
+
+      // 1. Initial valid install with full delegation
+      const first = installNativeAgents({
+        scope: 'user', workspaceRoot: workspace, homeDir: home, capabilityProfile: supportedProfile(true),
+      });
+      expect(first.ok).toBe(true);
+
+      // 2. Remediate -> receipt now has mcpServer: null and mcpConfigPath: null
+      const remediated = installNativeAgents({
+        scope: 'user', workspaceRoot: workspace, homeDir: home, capabilityProfile: supportedProfile(false),
+      });
+      expect(remediated.ok).toBe(true);
+      if (!remediated.ok) return;
+      expect(remediated.value.receipt.mcpServer).toBeNull();
+
+      // 3. User or 3rd party creates an exact-canonical oh-my-agy-agents entry in mcp_config.json
+      fs.writeFileSync(mcpConfigPath, JSON.stringify({
+        mcpServers: {
+          'oh-my-agy-agents': { ...CANONICAL_OMA_MCP_SERVER_ENTRY },
+        },
+      }, null, 2), 'utf8');
+
+      // 4. Delegation is restored -> upgrade attempt MUST fail closed instead of silently adopting the unowned entry
+      const upgrade = installNativeAgents({
+        scope: 'user', workspaceRoot: workspace, homeDir: home, capabilityProfile: supportedProfile(true),
+      });
+      expect(upgrade.ok).toBe(false);
+      if (!upgrade.ok) {
+        expect(upgrade.error.code).toBe('E_ALREADY_EXISTS');
+        expect(upgrade.error.message).toContain('Refusing to adopt unowned MCP server entry during upgrade');
+      }
+    } finally {
+      fs.rmSync(workspace, { recursive: true, force: true });
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   test('uses the documented Antigravity global agents directory for user scope', () => {
     const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'oma-agent-workspace-'));
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'oma-agent-home-'));
@@ -286,19 +415,21 @@ describe('native agent installation', () => {
 
   test('fails closed instead of overwriting an unowned canonical agent', () => {
     const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'oma-agent-collision-'));
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'oma-agent-collision-home-'));
     try {
-      const root = resolveNativeAgentRoot('project', workspace);
+      const root = resolveNativeAgentRoot('user', workspace, home);
       const target = path.join(root, 'oracle', 'agent.md');
       fs.mkdirSync(path.dirname(target), { recursive: true });
       fs.writeFileSync(target, 'user-owned\n', 'utf8');
       const result = installNativeAgents({
-        scope: 'project', workspaceRoot: workspace, capabilityProfile: supportedProfile(),
+        scope: 'user', workspaceRoot: workspace, homeDir: home, capabilityProfile: supportedProfile(true),
       });
       expect(result.ok).toBe(false);
       if (!result.ok) expect(result.error.code).toBe('E_ALREADY_EXISTS');
       expect(fs.readFileSync(target, 'utf8')).toBe('user-owned\n');
     } finally {
       fs.rmSync(workspace, { recursive: true, force: true });
+      fs.rmSync(home, { recursive: true, force: true });
     }
   });
 
@@ -309,7 +440,7 @@ describe('native agent installation', () => {
     try {
       fs.symlinkSync(outside, path.join(workspace, '.agents'), 'dir');
       const result = installNativeAgents({
-        scope: 'project', workspaceRoot: workspace, capabilityProfile: supportedProfile(),
+        scope: 'project', workspaceRoot: workspace, capabilityProfile: supportedProfile(true),
       });
       expect(result.ok).toBe(false);
       if (!result.ok) expect(result.error.code).toBe('E_PATH_OUTSIDE_ROOT');
@@ -322,33 +453,37 @@ describe('native agent installation', () => {
 
   test('detects external edits and refuses to claim them on reinstall', () => {
     const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'oma-agent-drift-'));
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'oma-agent-drift-home-'));
     try {
       const installed = installNativeAgents({
-        scope: 'project', workspaceRoot: workspace, capabilityProfile: supportedProfile(),
+        scope: 'user', workspaceRoot: workspace, homeDir: home, capabilityProfile: supportedProfile(true),
       });
       expect(installed.ok).toBe(true);
       if (!installed.ok) return;
       const target = path.join(installed.value.agentsRoot, 'fixer', 'agent.md');
       fs.appendFileSync(target, '\nuser edit\n', 'utf8');
       expect(doctorNativeAgentInstallation({
-        scope: 'project', workspaceRoot: workspace, capabilityProfile: supportedProfile(),
+        scope: 'user', workspaceRoot: workspace, homeDir: home, capabilityProfile: supportedProfile(true),
       }).status).toBe('drifted');
       const reinstall = installNativeAgents({
-        scope: 'project', workspaceRoot: workspace, capabilityProfile: supportedProfile(),
+        scope: 'user', workspaceRoot: workspace, homeDir: home, capabilityProfile: supportedProfile(true),
       });
       expect(reinstall.ok).toBe(false);
       if (!reinstall.ok) expect(reinstall.error.code).toBe('E_PROJECTION_HASH_MISMATCH');
     } finally {
       fs.rmSync(workspace, { recursive: true, force: true });
+      fs.rmSync(home, { recursive: true, force: true });
     }
   });
 
   test('succeeds and omits optional model and commandExecutionPolicy when they are unknown', () => {
     const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'oma-agent-optional-'));
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'oma-agent-optional-home-'));
     try {
       const result = installNativeAgents({
-        scope: 'project',
+        scope: 'user',
         workspaceRoot: workspace,
+        homeDir: home,
         capabilityProfile: supportedProfile(true),
       });
       expect(result.ok).toBe(true);
@@ -364,6 +499,7 @@ describe('native agent installation', () => {
       expect(fixer).toContain('tools:\n  - view_file\n  - grep_search\n  - replace_file_content\n  - run_command\n');
     } finally {
       fs.rmSync(workspace, { recursive: true, force: true });
+      fs.rmSync(home, { recursive: true, force: true });
     }
   });
 
@@ -479,9 +615,10 @@ describe('native agent installation', () => {
 
   test('orchestrator markdown contains no agent-local mcpServers', () => {
     const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'oma-agent-mcp-orch-'));
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'oma-agent-mcp-orch-home-'));
     try {
       const result = installNativeAgents({
-        scope: 'project', workspaceRoot: workspace, capabilityProfile: supportedProfile(),
+        scope: 'user', workspaceRoot: workspace, homeDir: home, capabilityProfile: supportedProfile(true),
       });
       expect(result.ok).toBe(true);
       if (!result.ok) return;
@@ -489,6 +626,7 @@ describe('native agent installation', () => {
       expect(orchestrator).not.toContain('mcpServers:');
     } finally {
       fs.rmSync(workspace, { recursive: true, force: true });
+      fs.rmSync(home, { recursive: true, force: true });
     }
   });
 
@@ -559,10 +697,11 @@ describe('native agent installation', () => {
 
   test('reads legacy agent receipt without mcp fields successfully', () => {
     const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'oma-agent-legacy-receipt-'));
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'oma-agent-legacy-receipt-home-'));
     try {
       // First do a normal install
       const installed = installNativeAgents({
-        scope: 'project', workspaceRoot: workspace, capabilityProfile: supportedProfile(),
+        scope: 'user', workspaceRoot: workspace, homeDir: home, capabilityProfile: supportedProfile(true),
       });
       expect(installed.ok).toBe(true);
       if (!installed.ok) return;
@@ -570,8 +709,6 @@ describe('native agent installation', () => {
       // Now rewrite the receipt to legacy format (without mcpConfigPath and mcpServer)
       const receiptPath = path.join(installed.value.agentsRoot, '.oma', 'receipt.json');
       const current = JSON.parse(fs.readFileSync(receiptPath, 'utf8'));
-      const { canonicalBytesV1 } = require('../../src/contracts/state-schemas');
-      const { sha256 } = require('../../src/runtime/atomic');
 
       const legacyBase = {
         schema: current.schema,
@@ -588,11 +725,12 @@ describe('native agent installation', () => {
 
       // Doctor should be able to read this legacy receipt without throwing E_CORRUPT_STATE
       const doctor = doctorNativeAgentInstallation({
-        scope: 'project', workspaceRoot: workspace, capabilityProfile: supportedProfile(),
+        scope: 'user', workspaceRoot: workspace, homeDir: home, capabilityProfile: supportedProfile(true),
       });
       expect(doctor.status).toBe('healthy');
     } finally {
       fs.rmSync(workspace, { recursive: true, force: true });
+      fs.rmSync(home, { recursive: true, force: true });
     }
   });
 

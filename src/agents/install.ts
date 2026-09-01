@@ -191,7 +191,16 @@ export function installNativeAgents(
 ): Result<NativeAgentInstallResultV1, RuntimeError> {
   const capability = validateNativeAgentCapabilityProfile(options.capabilityProfile);
   if (!capability.ok) return capability;
-  const delegation = assessNativeDelegationCapability(capability.value);
+  const mcpConfigPath = resolveMcpConfigPath(options.scope, options.workspaceRoot, options.homeDir);
+  const baseDelegation = assessNativeDelegationCapability(capability.value);
+  const delegation: NativeDelegationCapabilityV1 = mcpConfigPath === null
+    ? {
+        status: 'unavailable',
+        profileDigest: baseDelegation.profileDigest,
+        requirements: baseDelegation.requirements,
+        diagnostic: 'project-scope MCP binding is unproven / unavailable',
+      }
+    : baseDelegation;
   const nativeDelegationAvailable = delegation.status === 'available';
   const renderOptions = resolveRenderOptions(capability.value, nativeDelegationAvailable);
   const agentsRoot = resolveNativeAgentRoot(options.scope, options.workspaceRoot, options.homeDir);
@@ -208,7 +217,6 @@ export function installNativeAgents(
   const previousReceipt = readReceipt(receiptPath, options.scope);
   if (!previousReceipt.ok) return previousReceipt;
 
-  const mcpConfigPath = resolveMcpConfigPath(options.scope, options.workspaceRoot, options.homeDir);
   let legacyMcpMigrated = false;
   let remediated = false;
 
@@ -253,45 +261,46 @@ export function installNativeAgents(
     const ownership = verifyOwnedFiles(agentsRoot, previousReceipt.value);
     if (!ownership.ok) return ownership;
 
-    if (!nativeDelegationAvailable) {
-      if (previousReceipt.value.mcpServer !== null) {
-        remediated = true;
-      }
-    } else {
-      if (mcpConfigPath && fs.existsSync(mcpConfigPath)) {
-        const safeMcp = validateMcpConfigPath(mcpConfigPath);
-        if (!safeMcp.ok) return safeMcp;
-        try {
-          const config = JSON.parse(fs.readFileSync(mcpConfigPath, 'utf8'));
-          if (typeof config === 'object' && config !== null && !Array.isArray(config)
-            && config.mcpServers && typeof config.mcpServers === 'object' && !Array.isArray(config.mcpServers)) {
-            const existing = config.mcpServers[CANONICAL_OMA_MCP_SERVER_NAME];
-            if (existing !== undefined) {
-              if (previousReceipt.value.isLegacyReceipt) {
-                if (isCanonicalMcpEntry(existing)) {
-                  legacyMcpMigrated = true;
-                } else {
-                  return err(runtimeError(
-                    'E_ALREADY_EXISTS',
-                    `Refusing to adopt non-canonical MCP server entry during legacy migration: ${CANONICAL_OMA_MCP_SERVER_NAME}`,
-                  ));
-                }
-              } else if (previousReceipt.value.mcpServer && !isCanonicalMcpEntry(existing)) {
+    if (nativeDelegationAvailable && mcpConfigPath && fs.existsSync(mcpConfigPath)) {
+      const safeMcp = validateMcpConfigPath(mcpConfigPath);
+      if (!safeMcp.ok) return safeMcp;
+      try {
+        const config = JSON.parse(fs.readFileSync(mcpConfigPath, 'utf8'));
+        if (typeof config === 'object' && config !== null && !Array.isArray(config)
+          && config.mcpServers && typeof config.mcpServers === 'object' && !Array.isArray(config.mcpServers)) {
+          const existing = config.mcpServers[CANONICAL_OMA_MCP_SERVER_NAME];
+          if (existing !== undefined) {
+            if (previousReceipt.value.isLegacyReceipt) {
+              if (isCanonicalMcpEntry(existing)) {
+                legacyMcpMigrated = true;
+              } else {
+                return err(runtimeError(
+                  'E_ALREADY_EXISTS',
+                  `Refusing to adopt non-canonical MCP server entry during legacy migration: ${CANONICAL_OMA_MCP_SERVER_NAME}`,
+                ));
+              }
+            } else if (previousReceipt.value.mcpServer !== null) {
+              if (!isCanonicalMcpEntry(existing)) {
                 return err(runtimeError(
                   'E_ALREADY_EXISTS',
                   `Refusing to overwrite a modified or foreign MCP server entry: ${CANONICAL_OMA_MCP_SERVER_NAME}`,
                 ));
               }
+            } else {
+              return err(runtimeError(
+                'E_ALREADY_EXISTS',
+                `Refusing to adopt unowned MCP server entry during upgrade: ${CANONICAL_OMA_MCP_SERVER_NAME}`,
+              ));
             }
           }
-        } catch (cause) {
-          if (cause instanceof SyntaxError) {
-            return err(runtimeError('E_CORRUPT_STATE', 'MCP config file is invalid JSON', {
-              cause: cause.message,
-            }));
-          }
-          throw cause;
         }
+      } catch (cause) {
+        if (cause instanceof SyntaxError) {
+          return err(runtimeError('E_CORRUPT_STATE', 'MCP config file is invalid JSON', {
+            cause: cause.message,
+          }));
+        }
+        throw cause;
       }
     }
 
@@ -320,6 +329,9 @@ export function installNativeAgents(
         receipt: previousReceipt.value,
         delegation,
       });
+    }
+    if (!nativeDelegationAvailable) {
+      remediated = true;
     }
   }
 
@@ -497,7 +509,16 @@ export function doctorNativeAgentInstallation(
 ): NativeAgentDoctorReportV1 {
   const agentsRoot = resolveNativeAgentRoot(options.scope, options.workspaceRoot, options.homeDir);
   const receiptPath = path.join(agentsRoot, '.oma', 'receipt.json');
-  const delegation = assessNativeDelegationCapability(options.capabilityProfile);
+  const mcpConfigPath = resolveMcpConfigPath(options.scope, options.workspaceRoot, options.homeDir);
+  const baseDelegation = assessNativeDelegationCapability(options.capabilityProfile);
+  const delegation: NativeDelegationCapabilityV1 = mcpConfigPath === null
+    ? {
+        status: 'unavailable',
+        profileDigest: baseDelegation.profileDigest,
+        requirements: baseDelegation.requirements,
+        diagnostic: 'project-scope MCP binding is unproven / unavailable',
+      }
+    : baseDelegation;
   const capability = validateNativeAgentCapabilityProfile(options.capabilityProfile);
   if (!capability.ok) {
     return {
