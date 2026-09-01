@@ -7,7 +7,6 @@ import {
   assembleHostCapabilityProfile,
   hostCapabilityIdentityDigest,
 } from '../capability-profile';
-import { isWeakUnprovenRead } from './live';
 import { ProbeResultV1 } from './types';
 
 export interface PassiveProfileAssemblyInputV1 {
@@ -47,16 +46,7 @@ export function completePassiveObservationCoverage(
   observedAt: string,
   identityDigest: string,
 ): CapabilityObservationV1[] {
-  const positiveCapabilities = new Set(
-    observations
-      .filter(({ result }) => result === 'positive')
-      .map(({ capability }) => capability),
-  );
-  const normalized = observations.filter((observation) => !(
-    positiveCapabilities.has(observation.capability)
-      && isWeakUnprovenRead(observation)
-  ));
-  const covered = new Set(normalized.map(({ capability }) => capability));
+  const covered = new Set(observations.map(({ capability }) => capability));
   const missing = HOST_CAPABILITY_POLICY_REGISTRY_V1
     .filter(({ key }) => !covered.has(key))
     .map((policy): CapabilityObservationV1 => ({
@@ -69,5 +59,5 @@ export function completePassiveObservationCoverage(
       detailCode: policy.sideEffect === 'passive-cache-only' ? 'PASSIVE_EVIDENCE_MISSING' : 'LIVE_OPT_IN_REQUIRED',
       diagnostic: null,
     }));
-  return [...normalized, ...missing];
+  return [...observations, ...missing];
 }

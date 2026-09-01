@@ -301,6 +301,59 @@ describe('custom-agent live canary', () => {
       .toMatchObject({ result: 'positive', tier: 'verified' });
     expect(fs.existsSync(workspace)).toBe(false);
   });
+
+  test('regression P0-K2: custom_agent.main_agent remains indeterminate when main probe returns a different non-empty init.agent', async () => {
+    let workspace = '';
+    const result = await runCustomAgentLiveCanary({
+      executable: '/agy',
+      context,
+      now: () => '2026-08-31T06:00:30.000Z',
+      runner: async (request) => {
+        workspace = request.cwd ?? '';
+        if (request.argv.includes('--agent')) {
+          // Return a different agent than the requested parentName
+          return successfulMainStream('fallback-default-agent');
+        }
+        const prompt = valueAfter(request.argv, '--print');
+        const childName = marker(prompt, 'CHILD_AGENT');
+        const finalToken = marker(prompt, 'FINAL_TOKEN');
+        return successfulStream(finalToken, true, { childTypeName: childName });
+      },
+    });
+
+    expect(result.observations.find(({ capability }) => capability === 'custom_agent.main_agent'))
+      .toMatchObject({ result: 'indeterminate' });
+    expect(result.observations.find(({ capability }) => capability === 'custom_agent.subagent'))
+      .toMatchObject({ result: 'positive', source: 'live_probe' });
+    expect(result.observations.find(({ capability }) => capability === 'custom_agent.markdown'))
+      .toMatchObject({ result: 'positive', source: 'live_probe' });
+    expect(fs.existsSync(workspace)).toBe(false);
+  });
+
+  test('regression P0-K2: static child with same prefix but different nonce is rejected', async () => {
+    let workspace = '';
+    const result = await runCustomAgentLiveCanary({
+      executable: '/agy',
+      context,
+      now: () => '2026-08-31T06:00:30.000Z',
+      runner: async (request) => {
+        workspace = request.cwd ?? '';
+        const prompt = valueAfter(request.argv, '--print');
+        const childName = marker(prompt, 'CHILD_AGENT');
+        const finalToken = marker(prompt, 'FINAL_TOKEN');
+        return successfulStream(finalToken, true, {
+          childTypeName: `${childName}-different-nonce`,
+        });
+      },
+    });
+
+    expect(result).toMatchObject({ cacheable: false, detailCode: 'LIVE_CUSTOM_AGENT_PARTIAL' });
+    expect(result.observations.find(({ capability }) => capability === 'custom_agent.subagent'))
+      .toMatchObject({ result: 'indeterminate' });
+    expect(result.observations.find(({ capability }) => capability === 'subagent.invoke'))
+      .toMatchObject({ result: 'indeterminate' });
+    expect(fs.existsSync(workspace)).toBe(false);
+  });
 });
 
 function successfulStream(

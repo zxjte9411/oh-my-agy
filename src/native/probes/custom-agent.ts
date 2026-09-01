@@ -163,7 +163,7 @@ export async function runCustomAgentLiveCanary(
     const diagnostic = coreStaticDelegationVerified ? null : evidence.diagnostic;
     const observations: CapabilityObservationV1[] = [
       observation('custom_agent.markdown', coreStaticDelegationVerified || mainAgentProven, 'observed', timestamp, request.context, detailCode, diagnostic),
-      observation('custom_agent.main_agent', coreStaticDelegationVerified || mainAgentProven, 'observed', timestamp, request.context, detailCode, diagnostic),
+      observation('custom_agent.main_agent', mainAgentProven, 'observed', timestamp, request.context, detailCode, diagnostic),
       observation('custom_agent.command_execution_policy', false, 'observed', timestamp, request.context, detailCode, diagnostic),
       observation('custom_agent.model', modelProjected, 'observed', timestamp, request.context, detailCode, diagnostic),
       observation('custom_agent.subagent', coreStaticDelegationVerified, 'verified', timestamp, request.context, detailCode, diagnostic),
@@ -280,7 +280,7 @@ function parseStreamEvidence(stdout: string, expectedFinalToken: string, expecte
         const subagentInfoValue = step.subagent_info;
         if (plainObject(subagentInfoValue) && Array.isArray(subagentInfoValue.subagents)) {
           if (subagentInfoValue.subagents.some((value: unknown) =>
-            plainObject(value) && typeof value.type_name === 'string' && (value.type_name === expectedChildName || value.type_name.startsWith(LIVE_CUSTOM_AGENT_CHILD_V1)))) {
+            plainObject(value) && typeof value.type_name === 'string' && value.type_name === expectedChildName)) {
             childInvoked = true;
           }
         }
@@ -329,7 +329,7 @@ function parseMainStreamEvidence(stdout: string, expectedMainName: string) {
       const parsed = JSON.parse(line) as unknown;
       if (plainObject(parsed) && parsed.event === 'init' && plainObject(parsed.init)) {
         return {
-          mainAgentSelected: parsed.init.agent === expectedMainName || typeof parsed.init.agent === 'string',
+          mainAgentSelected: parsed.init.agent === expectedMainName,
           modelProjected: typeof parsed.init.model === 'string' && parsed.init.model.trim() !== '',
         };
       }
