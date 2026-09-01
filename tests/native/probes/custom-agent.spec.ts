@@ -34,29 +34,19 @@ describe('custom-agent live canary', () => {
       now: () => '2026-08-31T06:00:30.000Z',
       runner: async (request) => {
         workspace = request.cwd ?? '';
+        expect(request.maximumProcesses).toBe(32);
+        if (request.argv.includes('--agent')) {
+          const agentName = valueAfter(request.argv, '--agent');
+          return successfulMainStream(agentName);
+        }
         expect(request.argv).toEqual(expect.arrayContaining([
-          '--agent', LIVE_CUSTOM_AGENT_PARENT_V1,
           '--output-format', 'stream-json',
           '--sandbox',
         ]));
-        expect(request.maximumProcesses).toBe(32);
-        expect(fs.existsSync(path.join(
-          workspace,
-          '.agents',
-          'agents',
-          LIVE_CUSTOM_AGENT_PARENT_V1,
-          'agent.md',
-        ))).toBe(true);
-        expect(fs.existsSync(path.join(
-          workspace,
-          '.agents',
-          'agents',
-          LIVE_CUSTOM_AGENT_CHILD_V1,
-          'agent.md',
-        ))).toBe(true);
         const prompt = valueAfter(request.argv, '--print');
+        const childName = marker(prompt, 'CHILD_AGENT');
         const finalToken = marker(prompt, 'FINAL_TOKEN');
-        return successfulStream(finalToken, true);
+        return successfulStream(finalToken, true, { childTypeName: childName });
       },
     });
 
@@ -90,8 +80,15 @@ describe('custom-agent live canary', () => {
       now: () => '2026-08-31T06:00:30.000Z',
       runner: async (request) => {
         workspace = request.cwd ?? '';
-        const finalToken = marker(valueAfter(request.argv, '--print'), 'FINAL_TOKEN');
+        if (request.argv.includes('--agent')) {
+          const agentName = valueAfter(request.argv, '--agent');
+          return successfulMainStream(agentName, { omitInitModel: true });
+        }
+        const prompt = valueAfter(request.argv, '--print');
+        const childName = marker(prompt, 'CHILD_AGENT');
+        const finalToken = marker(prompt, 'FINAL_TOKEN');
         return successfulStream(finalToken, true, {
+          childTypeName: childName,
           omitInitModel: true,
           stepType: 'subagent',
           response: `${finalToken}\n${finalToken}\n`,
@@ -126,14 +123,14 @@ describe('custom-agent live canary', () => {
         calls += 1;
         workspace = request.cwd ?? '';
         expect(request.argv).toEqual(expect.arrayContaining([
-          '--agent', LIVE_CUSTOM_AGENT_PARENT_V1,
           '--output-format', 'stream-json',
+          '--sandbox',
         ]));
         return {
           status: 2,
           signal: null,
           stdout: '',
-          stderr: 'unknown option --agent',
+          stderr: 'unknown option --sandbox',
           timedOut: false,
           outputOverflow: false,
           processCountOverflow: false,
@@ -156,14 +153,16 @@ describe('custom-agent live canary', () => {
       now: () => '2026-08-31T06:00:30.000Z',
       runner: async (request) => {
         workspace = request.cwd ?? '';
-        const finalToken = marker(valueAfter(request.argv, '--print'), 'FINAL_TOKEN');
-        return successfulStream(finalToken, false, { omitInitModel: true });
+        const prompt = valueAfter(request.argv, '--print');
+        const childName = marker(prompt, 'CHILD_AGENT');
+        const finalToken = marker(prompt, 'FINAL_TOKEN');
+        return successfulStream(finalToken, false, { childTypeName: childName, omitInitModel: true });
       },
     });
 
     expect(result).toMatchObject({ cacheable: false, detailCode: 'LIVE_CUSTOM_AGENT_PARTIAL' });
     expect(result.observations.find(({ capability }) => capability === 'custom_agent.markdown'))
-      .toMatchObject({ result: 'positive', tier: 'observed' });
+      .toMatchObject({ result: 'indeterminate' });
     expect(result.observations.find(({ capability }) => capability === 'custom_agent.model'))
       .toMatchObject({ result: 'indeterminate' });
     expect(result.observations.find(({ capability }) => capability === 'custom_agent.subagent'))
@@ -197,6 +196,7 @@ describe('custom-agent live canary', () => {
     expect(result.observations.every(({ result: outcome }) => outcome === 'indeterminate')).toBe(true);
     expect(fs.existsSync(workspace)).toBe(false);
   });
+
   test('recognizes real AGY step_type: subagent and accepts duplicated final-token lines', async () => {
     let workspace = '';
     const result = await runCustomAgentLiveCanary({
@@ -205,8 +205,15 @@ describe('custom-agent live canary', () => {
       now: () => '2026-08-31T06:00:30.000Z',
       runner: async (request) => {
         workspace = request.cwd ?? '';
-        const finalToken = marker(valueAfter(request.argv, '--print'), 'FINAL_TOKEN');
+        if (request.argv.includes('--agent')) {
+          const agentName = valueAfter(request.argv, '--agent');
+          return successfulMainStream(agentName);
+        }
+        const prompt = valueAfter(request.argv, '--print');
+        const childName = marker(prompt, 'CHILD_AGENT');
+        const finalToken = marker(prompt, 'FINAL_TOKEN');
         return successfulStream(finalToken, true, {
+          childTypeName: childName,
           stepType: 'subagent',
           response: `${finalToken}\n${finalToken}\n`,
         });
@@ -227,8 +234,11 @@ describe('custom-agent live canary', () => {
       now: () => '2026-08-31T06:00:30.000Z',
       runner: async (request) => {
         workspace = request.cwd ?? '';
-        const finalToken = marker(valueAfter(request.argv, '--print'), 'FINAL_TOKEN');
+        const prompt = valueAfter(request.argv, '--print');
+        const childName = marker(prompt, 'CHILD_AGENT');
+        const finalToken = marker(prompt, 'FINAL_TOKEN');
         return successfulStream(finalToken, true, {
+          childTypeName: childName,
           response: `${finalToken}\nunrelated extra output\n`,
         });
       },
@@ -248,7 +258,8 @@ describe('custom-agent live canary', () => {
       now: () => '2026-08-31T06:00:30.000Z',
       runner: async (request) => {
         workspace = request.cwd ?? '';
-        const finalToken = marker(valueAfter(request.argv, '--print'), 'FINAL_TOKEN');
+        const prompt = valueAfter(request.argv, '--print');
+        const finalToken = marker(prompt, 'FINAL_TOKEN');
         return successfulStream(finalToken, true, {
           childTypeName: 'wrong-child-agent-name',
         });
@@ -269,8 +280,11 @@ describe('custom-agent live canary', () => {
       now: () => '2026-08-31T06:00:30.000Z',
       runner: async (request) => {
         workspace = request.cwd ?? '';
-        const finalToken = marker(valueAfter(request.argv, '--print'), 'FINAL_TOKEN');
+        const prompt = valueAfter(request.argv, '--print');
+        const childName = marker(prompt, 'CHILD_AGENT');
+        const finalToken = marker(prompt, 'FINAL_TOKEN');
         return successfulStream(finalToken, true, {
+          childTypeName: childName,
           includeDefineSubagent: true,
         });
       },
@@ -361,6 +375,40 @@ function successfulStream(
       error: null,
     },
   });
+  return {
+    status: 0,
+    signal: null,
+    stdout: `${events.map((event) => JSON.stringify(event)).join('\n')}\n`,
+    stderr: '',
+    timedOut: false,
+    outputOverflow: false,
+    processCountOverflow: false,
+  } as const;
+}
+
+function successfulMainStream(agentName: string, options?: { omitInitModel?: boolean }) {
+  const events: unknown[] = [
+    {
+      event: 'init',
+      conversation_id: 'fixture-main-stream',
+      init: {
+        cwd: '/workspace',
+        tools: ['view_file'],
+        permission_mode: 'request-review',
+        ...(options?.omitInitModel === true ? {} : { model: 'fixture-flash' }),
+        agent: agentName,
+      },
+    },
+    {
+      event: 'result',
+      result: {
+        conversation_id: 'fixture-main-stream',
+        status: 'SUCCESS',
+        response: 'OK',
+        error: null,
+      },
+    },
+  ];
   return {
     status: 0,
     signal: null,

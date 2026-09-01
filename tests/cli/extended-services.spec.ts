@@ -402,7 +402,6 @@ exit 0
       expect(liveCalls[1]).not.toContain('--sandbox');
       expect(liveCalls[2]).toEqual(expect.arrayContaining(['--mode', 'plan', '--sandbox']));
       expect(liveCalls[3]).toEqual(expect.arrayContaining([
-        '--agent', 'oma-live-probe-main',
         '--output-format', 'stream-json',
         '--sandbox',
       ]));

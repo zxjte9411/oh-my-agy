@@ -59,16 +59,17 @@ describe('native Markdown agent rendering', () => {
     }
   });
 
-  test('enables native delegation only on a capability-proven orchestrator', () => {
+  test('orchestrator Markdown never exposes invoke_subagent even when native delegation is available in environment', () => {
     const orchestrator = renderCanonicalAgent('orchestrator', { nativeDelegationAvailable: true });
     expect(orchestrator.tools).toEqual([
-      'view_file', 'grep_search', 'replace_file_content', 'run_command', 'invoke_subagent',
+      'view_file', 'grep_search', 'replace_file_content', 'run_command',
     ]);
-    expect(orchestrator.omaMcpConfigured).toBe(true);
-    expect(orchestrator.markdown).toContain('  - invoke_subagent');
+    expect(orchestrator.tools).not.toContain('invoke_subagent');
+    expect(orchestrator.omaMcpConfigured).toBe(false);
+    expect(orchestrator.markdown).not.toContain('invoke_subagent');
     expect(orchestrator.markdown).not.toContain('mcpServers:');
-    expect(orchestrator.markdown).toContain('delegation.plan');
-    expect(orchestrator.markdown).toContain('workspace: inherit');
+    expect(orchestrator.markdown).toContain("You are OMA's orchestration-focused main agent.");
+    expect(orchestrator.markdown).toContain('Native subagent delegation operates in the root/in-session conversation');
 
     for (const id of CANONICAL_AGENT_IDS_V1.filter((agentId) => agentId !== 'orchestrator')) {
       const child = renderCanonicalAgent(id, { nativeDelegationAvailable: true });
@@ -76,6 +77,16 @@ describe('native Markdown agent rendering', () => {
       expect(child.omaMcpConfigured).toBe(false);
       expect(child.markdown).not.toContain('mcpServers:');
     }
+  });
+
+  test('regression P0-I2: root-session evidence does not project invoke_subagent into orchestrator agent.md', () => {
+    const orchestrator = renderCanonicalAgent('orchestrator', {
+      nativeDelegationAvailable: true,
+      modelProjectionAvailable: true,
+      commandExecutionPolicyAvailable: true,
+    });
+    expect(orchestrator.markdown).not.toContain('invoke_subagent');
+    expect(orchestrator.tools).not.toContain('invoke_subagent');
   });
 
   test('keeps the non-native orchestrator on its base posture when capability is unavailable', () => {

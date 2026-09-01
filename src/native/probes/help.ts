@@ -31,6 +31,8 @@ const HELP_TOKENS: Readonly<Record<string, readonly RegExp[]>> = Object.freeze({
   'effort.selection': [exactLongOption('effort')],
   'mcp.local_config': [exactHelpToken('mcp')],
   'mcp.remote_config': [exactHelpToken('mcp')],
+  'custom_agent.main_agent': [exactLongOption('agent')],
+  'custom_agent.markdown': [exactLongOption('agent')],
 });
 
 export async function probeDocumentedHelp(
