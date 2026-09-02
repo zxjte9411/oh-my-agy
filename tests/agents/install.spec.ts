@@ -110,11 +110,10 @@ describe('native agent installation', () => {
         path.join(first.value.agentsRoot, 'orchestrator', 'agent.md'),
         'utf8',
       );
-      expect(orchestrator).toContain('  - invoke_subagent');
+      expect(orchestrator).not.toContain('invoke_subagent');
       expect(orchestrator).not.toContain('mcpServers:');
+      expect(orchestrator).toContain("You are OMA's orchestration-focused main agent.");
       expect(first.value.mcpConfigPath).toBe(path.join(home, '.gemini', 'config', 'mcp_config.json'));
-      expect(orchestrator).toContain('delegation.plan');
-      expect(orchestrator).toContain('delegation.reconcile');
       expect(fs.existsSync(path.join(first.value.agentsRoot, 'reviewer'))).toBe(false);
       expect(fs.existsSync(first.value.receiptPath)).toBe(true);
 
@@ -199,8 +198,7 @@ describe('native agent installation', () => {
       expect(first.value.delegation.status).toBe('available');
       expect(first.value.remediated).toBe(false);
       const orchestratorFull = fs.readFileSync(path.join(first.value.agentsRoot, 'orchestrator', 'agent.md'), 'utf8');
-      expect(orchestratorFull).toContain('invoke_subagent');
-      expect(orchestratorFull).toContain('delegation.plan');
+      expect(orchestratorFull).not.toContain('invoke_subagent');
       const mcpWithOma = JSON.parse(fs.readFileSync(mcpConfigPath, 'utf8'));
       expect(mcpWithOma.mcpServers['oh-my-agy-agents']).toBeDefined();
       expect(mcpWithOma.mcpServers['foreign_server']).toBeDefined();
@@ -248,8 +246,7 @@ describe('native agent installation', () => {
       expect(upgrade.value.remediated).toBe(false);
       expect(upgrade.value.delegation.status).toBe('available');
       const orchestratorUpgraded = fs.readFileSync(path.join(upgrade.value.agentsRoot, 'orchestrator', 'agent.md'), 'utf8');
-      expect(orchestratorUpgraded).toContain('invoke_subagent');
-      expect(orchestratorUpgraded).toContain('delegation.plan');
+      expect(orchestratorUpgraded).not.toContain('invoke_subagent');
       const mcpUpgraded = JSON.parse(fs.readFileSync(mcpConfigPath, 'utf8'));
       expect(mcpUpgraded.mcpServers['oh-my-agy-agents']).toBeDefined();
       expect(mcpUpgraded.mcpServers['foreign_server']).toBeDefined();
@@ -312,13 +309,21 @@ describe('native agent installation', () => {
       for (const agent of agents) {
         const agentDir = path.join(agentsRoot, agent.id);
         fs.mkdirSync(agentDir, { recursive: true });
-        fs.writeFileSync(path.join(agentDir, 'agent.md'), agent.markdown, 'utf8');
+        const content = agent.id === 'orchestrator'
+          ? `${agent.markdown}\n# Legacy\ninvoke_subagent\n`
+          : agent.markdown;
+        fs.writeFileSync(path.join(agentDir, 'agent.md'), content, 'utf8');
       }
-      const files = agents.map((agent: any) => ({
-        id: agent.id,
-        path: `${agent.id}/agent.md`,
-        sha256: sha256(agent.markdown),
-      }));
+      const files = agents.map((agent: any) => {
+        const content = agent.id === 'orchestrator'
+          ? `${agent.markdown}\n# Legacy\ninvoke_subagent\n`
+          : agent.markdown;
+        return {
+          id: agent.id,
+          path: `${agent.id}/agent.md`,
+          sha256: sha256(content),
+        };
+      });
       const receiptDir = path.join(agentsRoot, '.oma');
       fs.mkdirSync(receiptDir, { recursive: true });
       const receiptPath = path.join(receiptDir, 'receipt.json');

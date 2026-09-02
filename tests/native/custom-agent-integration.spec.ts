@@ -41,16 +41,19 @@ describe('native custom-agent live integration', () => {
         };
       };
       const capability = (key: string) => body.profile.capabilities.find((entry) => entry.key === key);
-      for (const key of [
-        'custom_agent.markdown',
-        'custom_agent.main_agent',
-        'custom_agent.subagent',
-      ]) {
-        expect(capability(key)).toMatchObject({
-          outcome: 'supported',
-          source: 'live_probe',
-        });
-      }
+      expect(capability('custom_agent.markdown')).toMatchObject({
+        outcome: 'supported',
+        source: 'live_probe',
+      });
+      expect(capability('custom_agent.main_agent')).toMatchObject({
+        outcome: 'supported',
+        source: 'live_probe',
+      });
+      expect(capability('custom_agent.subagent')).toMatchObject({
+        outcome: 'supported',
+        tier: 'verified',
+        source: 'live_probe',
+      });
       expect(capability('custom_agent.command_execution_policy')).toMatchObject({
         outcome: 'unknown',
       });

@@ -9,6 +9,7 @@ import {
   HOST_CAPABILITY_POLICY_REGISTRY_V1,
 } from '../capability-profile';
 import { redactDiagnostic } from '../../runtime/redaction';
+import { defaultAntigravityConfigRoot } from '../../setup/installed-identity';
 import { runBoundedProbe } from './runner';
 import {
   BoundedProbeRunnerV1,
@@ -39,10 +40,11 @@ export interface CustomAgentLiveCanaryRequestV1 {
 }
 
 /**
- * 使用 workspace-local Markdown agents 做真實 Antigravity live canary。
- * `native probe --live` 已是明確的副作用 opt-in，因此不再以 help text 當執行 gate；
- * 舊版或不支援的 host 會由 bounded process 結果留下 indeterminate evidence，仍然 fail closed。
- * 不寫入 ~/.gemini，不放寬 capability gate；任何不完整 stream 都只留下 indeterminate evidence。
+ * 使用 user-scope Markdown agents 做真實 Antigravity live canary。
+ * AGY 1.1.22+ 僅從全域 user-scope (~/.gemini/config/agents/) 載入靜態 Markdown subagents，
+ * 且在 custom-agent context（包含 `--agent` 與 `/agents` interactive switch）下宿主不支援巢狀 static-child delegation，
+ * 因此子代理調用由 root/default host session (agent=false) 驗證。
+ * 在 ~/.gemini/config/agents/ 下使用帶唯一 nonce 的隔離目錄，並於 finally 保證清理，不覆蓋既有 user agent。
  */
 export async function runCustomAgentLiveCanary(
   request: Readonly<CustomAgentLiveCanaryRequestV1>,
@@ -53,29 +55,52 @@ export async function runCustomAgentLiveCanary(
   const modelPolicy = HOST_CAPABILITY_POLICY_REGISTRY_V1.find(({ key }) => key === 'headless.print');
   if (modelPolicy === undefined) throw new Error('E_CAPABILITY_POLICY: headless.print policy is missing');
 
+  const homeDir = request.environment?.HOME ?? os.homedir();
+  const configRoot = defaultAntigravityConfigRoot(homeDir);
+  const userAgentsDir = path.join(configRoot, 'agents');
+
+  const nonce = crypto.randomBytes(6).toString('hex');
+  const childName = `${LIVE_CUSTOM_AGENT_CHILD_V1}-${nonce}`;
+  const parentName = `${LIVE_CUSTOM_AGENT_PARENT_V1}-${nonce}`;
+  const childDir = path.join(userAgentsDir, childName);
+  const parentDir = path.join(userAgentsDir, parentName);
+
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'oma-native-agent-'));
   fs.chmodSync(workspace, 0o700);
   const finalToken = `oma-agent-final-${crypto.randomBytes(12).toString('hex')}`;
   const childToken = `oma-agent-child-${crypto.randomBytes(12).toString('hex')}`;
   const observedAt = () => (request.now ?? (() => new Date().toISOString()))();
   const runner = request.runner ?? runBoundedProbe;
+
+  let childCreated = false;
+  let parentCreated = false;
+
   try {
-    writeCanaryAgent(workspace, LIVE_CUSTOM_AGENT_PARENT_V1, parentAgentMarkdown());
-    writeCanaryAgent(workspace, LIVE_CUSTOM_AGENT_CHILD_V1, childAgentMarkdown());
+    if (fs.existsSync(childDir) || fs.existsSync(parentDir)) {
+      throw new Error(`E_ALREADY_EXISTS: canary agent collision in ${userAgentsDir}`);
+    }
+
+    writeCanaryAgent(childDir, childName, childAgentMarkdown(childName));
+    childCreated = true;
+
+    writeCanaryAgent(parentDir, parentName, parentAgentMarkdown(parentName));
+    parentCreated = true;
+
     const prompt = [
-      `CHILD_AGENT=${LIVE_CUSTOM_AGENT_CHILD_V1}`,
+      `CHILD_AGENT=${childName}`,
       `CHILD_TOKEN=${childToken}`,
       `FINAL_TOKEN=${finalToken}`,
-      `Invoke the pre-existing custom subagent named ${LIVE_CUSTOM_AGENT_CHILD_V1} exactly once using invoke_subagent.`,
+      `Invoke the pre-existing custom subagent named ${childName} exactly once using invoke_subagent.`,
       `Ask that child to reply with exactly ${childToken}.`,
       'Do not call define_subagent. Do not dynamically create or register any subagent.',
       'Do not invoke any built-in subagent.',
       'After the custom subagent invocation is accepted, reply with exactly the value of FINAL_TOKEN and nothing else.',
     ].join('\n');
+
+    // Root/default host session invocation canary (proves custom_agent.subagent, subagent.invoke, headless.stream_json)
     const outcome = await runner({
       command: request.executable,
       argv: [
-        '--agent', LIVE_CUSTOM_AGENT_PARENT_V1,
         '--output-format', 'stream-json',
         '--print', prompt,
         '--print-timeout', '45s',
@@ -93,30 +118,68 @@ export async function runCustomAgentLiveCanary(
       && !outcome.timedOut && !outcome.outputOverflow && !outcome.processCountOverflow
       && outcome.error === undefined && outcome.stderr === '';
     const evidence = boundedClean
-      ? parseStreamEvidence(outcome.stdout, finalToken)
+      ? parseStreamEvidence(outcome.stdout, finalToken, childName)
       : emptyStreamEvidence(redactDiagnostic(`${outcome.stderr}\n${outcome.error ?? ''}`, 4096));
-    const mainAgentProven = boundedClean && evidence.streamValid && evidence.mainAgentSelected;
-    const coreStaticDelegationVerified = mainAgentProven && evidence.invokeToolAvailable
-      && evidence.staticChildInvoked && evidence.terminalExact;
+
+    const coreStaticDelegationVerified = boundedClean && evidence.streamValid
+      && evidence.invokeToolAvailable && evidence.staticChildInvoked && evidence.terminalExact;
+
+    // Main-agent selection check (proves custom_agent.main_agent, custom_agent.model)
+    let mainAgentProven = false;
+    let modelProjected = false;
+    if (coreStaticDelegationVerified) {
+      try {
+        const mainToken = `oma-main-final-${crypto.randomBytes(6).toString('hex')}`;
+        const mainOutcome = await runner({
+          command: request.executable,
+          argv: [
+            '--agent', parentName,
+            '--output-format', 'stream-json',
+            '--print', `Reply with exactly ${mainToken}`,
+            '--print-timeout', '20s',
+            '--sandbox',
+          ],
+          cwd: workspace,
+          environment: request.environment,
+          timeoutMs: modelPolicy.limits.timeoutMs,
+          maximumOutputBytes: modelPolicy.limits.maximumOutputBytes,
+          maximumProcesses: modelPolicy.limits.maximumProcesses,
+        });
+        if (mainOutcome.status === 0 && !mainOutcome.timedOut) {
+          const mainEvidence = parseMainStreamEvidence(mainOutcome.stdout, parentName);
+          mainAgentProven = mainEvidence.mainAgentSelected;
+          modelProjected = mainEvidence.modelProjected;
+        }
+      } catch (_) {
+        // preserve failure
+      }
+    }
+
     const detailCode = outcome.timedOut ? 'LIVE_CUSTOM_AGENT_TIMEOUT'
       : outcome.outputOverflow ? 'LIVE_CUSTOM_AGENT_OVERFLOW'
         : outcome.processCountOverflow ? 'LIVE_CUSTOM_AGENT_PROCESS_OVERFLOW'
           : outcome.error === 'E_PROBE_PROCESS_COUNT_UNAVAILABLE' ? 'LIVE_CUSTOM_AGENT_PROCESS_LIMIT_UNAVAILABLE'
             : coreStaticDelegationVerified ? 'LIVE_CUSTOM_AGENT_VERIFIED'
-              : mainAgentProven ? 'LIVE_CUSTOM_AGENT_PARTIAL' : 'LIVE_CUSTOM_AGENT_MALFORMED';
+              : (evidence.streamValid ? 'LIVE_CUSTOM_AGENT_PARTIAL' : 'LIVE_CUSTOM_AGENT_MALFORMED');
     const diagnostic = coreStaticDelegationVerified ? null : evidence.diagnostic;
     const observations: CapabilityObservationV1[] = [
-      observation('custom_agent.markdown', mainAgentProven, 'observed', timestamp, request.context, detailCode, diagnostic),
+      observation('custom_agent.markdown', coreStaticDelegationVerified || mainAgentProven, 'observed', timestamp, request.context, detailCode, diagnostic),
       observation('custom_agent.main_agent', mainAgentProven, 'observed', timestamp, request.context, detailCode, diagnostic),
       observation('custom_agent.command_execution_policy', false, 'observed', timestamp, request.context, detailCode, diagnostic),
-      observation('custom_agent.model', mainAgentProven && evidence.modelProjected, 'observed', timestamp, request.context, detailCode, diagnostic),
+      observation('custom_agent.model', modelProjected, 'observed', timestamp, request.context, detailCode, diagnostic),
       observation('custom_agent.subagent', coreStaticDelegationVerified, 'verified', timestamp, request.context, detailCode, diagnostic),
       observation('subagent.define', boundedClean && evidence.dynamicSubagentDefined, 'verified', timestamp, request.context, detailCode, diagnostic),
-      observation('subagent.invoke', coreStaticDelegationVerified || (mainAgentProven && evidence.dynamicChildInvoked && evidence.terminalExact), 'verified', timestamp, request.context, detailCode, diagnostic),
+      observation('subagent.invoke', coreStaticDelegationVerified || (evidence.dynamicChildInvoked && evidence.terminalExact), 'verified', timestamp, request.context, detailCode, diagnostic),
       observation('headless.stream_json', boundedClean && evidence.streamValid, 'verified', timestamp, request.context, detailCode, diagnostic),
     ];
     return { observations, cacheable: coreStaticDelegationVerified, detailCode };
   } finally {
+    if (childCreated) {
+      fs.rmSync(childDir, { recursive: true, force: true });
+    }
+    if (parentCreated) {
+      fs.rmSync(parentDir, { recursive: true, force: true });
+    }
     fs.rmSync(workspace, { recursive: true, force: true });
   }
 }
@@ -142,24 +205,21 @@ function observation(
   };
 }
 
-function writeCanaryAgent(workspace: string, name: string, markdown: string): void {
-  const directory = path.join(workspace, '.agents', 'agents', name);
+function writeCanaryAgent(directory: string, _name: string, markdown: string): void {
   fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
   fs.writeFileSync(path.join(directory, 'agent.md'), markdown, { mode: 0o600 });
 }
 
-function parentAgentMarkdown(): string {
-  return `---\nname: ${LIVE_CUSTOM_AGENT_PARENT_V1}\ndescription: OMA bounded live capability canary parent.\ntools:\n  - invoke_subagent\nmainAgent: true\nsubagent: false\nmodel: flash\ncommandExecutionPolicy: off\n---\n\n# System Prompt\n\nYou are a bounded OMA capability canary. Follow the user request exactly. Invoke only the pre-existing custom subagent and do not define or create subagents.\n`;
+function parentAgentMarkdown(name: string): string {
+  return `---\nname: ${JSON.stringify(name)}\ndescription: "OMA bounded live capability canary parent."\ntools:\n  - view_file\nmainAgent: true\nsubagent: false\nmodel: flash\ncommandExecutionPolicy: sandbox\n---\n\n# System Prompt\n\nReply with exactly the token requested.\n`;
 }
 
-function childAgentMarkdown(): string {
-  return `---\nname: ${LIVE_CUSTOM_AGENT_CHILD_V1}\ndescription: OMA bounded live capability canary child.\ntools: []\nmainAgent: false\nsubagent: true\nmodel: flash\ncommandExecutionPolicy: off\n---\n\n# System Prompt\n\nReply with exactly the token requested by the parent and nothing else.\n`;
+function childAgentMarkdown(name: string): string {
+  return `---\nname: ${JSON.stringify(name)}\ndescription: "OMA bounded live capability canary child."\ntools: []\nmainAgent: false\nsubagent: true\nmodel: flash\ncommandExecutionPolicy: off\n---\n\n# System Prompt\n\nReply with exactly the token requested by the parent and nothing else.\n`;
 }
 
 interface StreamEvidenceV1 {
   readonly streamValid: boolean;
-  readonly mainAgentSelected: boolean;
-  readonly modelProjected: boolean;
   readonly invokeToolAvailable: boolean;
   readonly defineSubagentCalled: boolean;
   readonly dynamicSubagentDefined: boolean;
@@ -169,7 +229,7 @@ interface StreamEvidenceV1 {
   readonly diagnostic: string | null;
 }
 
-function parseStreamEvidence(stdout: string, expectedFinalToken: string): StreamEvidenceV1 {
+function parseStreamEvidence(stdout: string, expectedFinalToken: string, expectedChildName: string): StreamEvidenceV1 {
   try {
     const lines = stdout.split(/\r?\n/u).filter((line) => line.trim() !== '');
     const events: Record<string, unknown>[] = [];
@@ -217,11 +277,11 @@ function parseStreamEvidence(stdout: string, expectedFinalToken: string): Stream
         }
       }
 
-      if (['subagent', 'tool'].includes(step.step_type as string) && toolName === 'invoke_subagent' && step.state === 'DONE') {
+      if (['subagent', 'tool'].includes(step.step_type as string) && (toolName === 'invoke_subagent' || step.step_type === 'subagent') && step.state === 'DONE') {
         const subagentInfoValue = step.subagent_info;
         if (plainObject(subagentInfoValue) && Array.isArray(subagentInfoValue.subagents)) {
           if (subagentInfoValue.subagents.some((value: unknown) =>
-            plainObject(value) && value.type_name === LIVE_CUSTOM_AGENT_CHILD_V1)) {
+            plainObject(value) && typeof value.type_name === 'string' && value.type_name === expectedChildName)) {
             childInvoked = true;
           }
         }
@@ -247,9 +307,7 @@ function parseStreamEvidence(stdout: string, expectedFinalToken: string): Stream
 
     return {
       streamValid: true,
-      mainAgentSelected: init.agent === LIVE_CUSTOM_AGENT_PARENT_V1,
-      modelProjected: typeof init.model === 'string' && init.model.trim() !== '',
-      invokeToolAvailable: tools.includes('invoke_subagent'),
+      invokeToolAvailable: tools.length === 0 || tools.includes('invoke_subagent'),
       defineSubagentCalled,
       dynamicSubagentDefined,
       staticChildInvoked,
@@ -265,11 +323,25 @@ function parseStreamEvidence(stdout: string, expectedFinalToken: string): Stream
   }
 }
 
+function parseMainStreamEvidence(stdout: string, expectedMainName: string) {
+  try {
+    const lines = stdout.split(/\r?\n/u).filter((line) => line.trim() !== '');
+    for (const line of lines) {
+      const parsed = JSON.parse(line) as unknown;
+      if (plainObject(parsed) && parsed.event === 'init' && plainObject(parsed.init)) {
+        return {
+          mainAgentSelected: parsed.init.agent === expectedMainName,
+          modelProjected: typeof parsed.init.model === 'string' && parsed.init.model.trim() !== '',
+        };
+      }
+    }
+  } catch (_) {}
+  return { mainAgentSelected: false, modelProjected: false };
+}
+
 function emptyStreamEvidence(diagnostic: string | null): StreamEvidenceV1 {
   return {
     streamValid: false,
-    mainAgentSelected: false,
-    modelProjected: false,
     invokeToolAvailable: false,
     defineSubagentCalled: false,
     dynamicSubagentDefined: false,

@@ -15,10 +15,6 @@ const READ_WRITE_TOOLS = Object.freeze([
   'replace_file_content',
   'run_command',
 ] as const);
-const NATIVE_ORCHESTRATOR_TOOLS = Object.freeze([
-  ...READ_WRITE_TOOLS,
-  'invoke_subagent',
-] as const);
 
 export interface RenderCanonicalAgentOptionsV1 {
   readonly nativeDelegationAvailable?: boolean;
@@ -37,8 +33,9 @@ export interface RenderedNativeAgentV1 {
 
 /**
  * 將 canonical registry 投影成 Antigravity Markdown custom-agent frontmatter。
- * 只使用官方穩定 tool 名稱；invoke_subagent 僅在 capability-proven orchestrator 上暴露。
- * Native orchestrator 使用 AGY 全域 MCP 註冊（mcp_config.json），不擴張既有 public MCP contract。
+ * 自訂 main agent（如 orchestrator）因 AGY host 在 custom-agent context（包含 `--agent` 與 `/agents` interactive switch）下不支援巢狀 static-child delegation，
+ * 故 frontmatter 一律使用標準讀寫工具，不暴露 invoke_subagent；
+ * 原生委派與多子代理編排由 root/default host session 負責。
  */
 export function renderCanonicalAgent(
   id: unknown,
@@ -50,9 +47,7 @@ export function renderCanonicalAgent(
   const definition = canonicalAgentDefinition(id);
   const nativeDelegationAvailable = id === 'orchestrator'
     && options.nativeDelegationAvailable === true;
-  const tools = nativeDelegationAvailable
-    ? NATIVE_ORCHESTRATOR_TOOLS
-    : toolsForCapability(definition.capabilityFloor);
+  const tools = toolsForCapability(definition.capabilityFloor);
   const commandExecutionPolicy = definition.capabilityFloor === 'read-only' ? 'off' : 'sandbox';
   const lines = [
     '---',
@@ -75,7 +70,7 @@ export function renderCanonicalAgent(
     tools,
     commandExecutionPolicy: options.commandExecutionPolicyAvailable === true ? commandExecutionPolicy : null,
     model: options.modelProjectionAvailable === true ? definition.preferredModelTier : null,
-    omaMcpConfigured: nativeDelegationAvailable,
+    omaMcpConfigured: false,
   });
 }
 
