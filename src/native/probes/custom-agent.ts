@@ -42,7 +42,8 @@ export interface CustomAgentLiveCanaryRequestV1 {
 /**
  * 使用 user-scope Markdown agents 做真實 Antigravity live canary。
  * AGY 1.1.22+ 僅從全域 user-scope (~/.gemini/config/agents/) 載入靜態 Markdown subagents，
- * 且在 `--agent` 模式下宿主禁止巢狀調用，因此子代理調用由 root session (agent=false) 驗證。
+ * 且在 custom-agent context（包含 `--agent` 與 `/agents` interactive switch）下宿主不支援巢狀 static-child delegation，
+ * 因此子代理調用由 root/default host session (agent=false) 驗證。
  * 在 ~/.gemini/config/agents/ 下使用帶唯一 nonce 的隔離目錄，並於 finally 保證清理，不覆蓋既有 user agent。
  */
 export async function runCustomAgentLiveCanary(
@@ -96,7 +97,7 @@ export async function runCustomAgentLiveCanary(
       'After the custom subagent invocation is accepted, reply with exactly the value of FINAL_TOKEN and nothing else.',
     ].join('\n');
 
-    // Root-session invocation canary (proves custom_agent.subagent, subagent.invoke, headless.stream_json)
+    // Root/default host session invocation canary (proves custom_agent.subagent, subagent.invoke, headless.stream_json)
     const outcome = await runner({
       command: request.executable,
       argv: [

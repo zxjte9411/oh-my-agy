@@ -95,14 +95,9 @@ describe('managed invocation', () => {
     }));
     expect(runner.foregroundInteractive).toHaveBeenCalledTimes(1);
     const [command, argv, identity, policy] = runner.foregroundInteractive.mock.calls[0];
-    if (mode === 'search') {
-      expect(['agy', 'bwrap', 'sandbox-exec']).toContain(command);
-      expect(argv.at(-1)).toContain(`OMA-DIRECTIVE oma.${mode}/v1`);
-    } else {
-      expect(command).toBe('agy');
-      expect(argv.slice(0, -1)).toEqual(prefix);
-      expect(argv.at(-1)).toContain(`OMA-DIRECTIVE oma.${mode}/v1`);
-    }
+    expect(command).toBe('agy');
+    expect(argv.slice(0, -1)).toEqual(prefix);
+    expect(argv.at(-1)).toContain(`OMA-DIRECTIVE oma.${mode}/v1`);
     expect(identity).toEqual(prepared.operationIdentity);
     expect(policy).toEqual(expect.objectContaining({
       cwd: '/workspace',

@@ -33,9 +33,9 @@ export interface RenderedNativeAgentV1 {
 
 /**
  * 將 canonical registry 投影成 Antigravity Markdown custom-agent frontmatter。
- * 自訂 main agent（如 orchestrator）因 AGY host 在 `--agent` 模式下禁止巢狀 invoke_subagent，
+ * 自訂 main agent（如 orchestrator）因 AGY host 在 custom-agent context（包含 `--agent` 與 `/agents` interactive switch）下不支援巢狀 static-child delegation，
  * 故 frontmatter 一律使用標準讀寫工具，不暴露 invoke_subagent；
- * 原生委派與多子代理編排由 root-session / in-session 流程負責。
+ * 原生委派與多子代理編排由 root/default host session 負責。
  */
 export function renderCanonicalAgent(
   id: unknown,

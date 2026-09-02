@@ -69,7 +69,7 @@ describe('native Markdown agent rendering', () => {
     expect(orchestrator.markdown).not.toContain('invoke_subagent');
     expect(orchestrator.markdown).not.toContain('mcpServers:');
     expect(orchestrator.markdown).toContain("You are OMA's orchestration-focused main agent.");
-    expect(orchestrator.markdown).toContain('Native subagent delegation operates in the root/in-session conversation');
+    expect(orchestrator.markdown).toContain('Native subagent delegation operates in the root/default host session');
 
     for (const id of CANONICAL_AGENT_IDS_V1.filter((agentId) => agentId !== 'orchestrator')) {
       const child = renderCanonicalAgent(id, { nativeDelegationAvailable: true });
@@ -79,7 +79,7 @@ describe('native Markdown agent rendering', () => {
     }
   });
 
-  test('regression P0-I2: root-session evidence does not project invoke_subagent into orchestrator agent.md', () => {
+  test('regression P0-I2: root/default session evidence does not project invoke_subagent into orchestrator agent.md', () => {
     const orchestrator = renderCanonicalAgent('orchestrator', {
       nativeDelegationAvailable: true,
       modelProjectionAvailable: true,
